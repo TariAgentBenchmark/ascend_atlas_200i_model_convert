@@ -1,0 +1,16 @@
+batch_size: 48
+epochs: 200
+hidden_size: 30
+lambda_attn_aux: 1
+lambda_disentangle_pressure: 1
+lambda_disentangle_shared: 1
+lambda_disentangle_vibration: 1
+lambda_pred_phy: 1
+lambda_pred_pressure: 1
+lambda_pred_shared: 1
+lambda_pred_vibration: 1
+lr: 0.0001
+num_workers: 4
+patience: 15
+seed: 0
+wd: 0
