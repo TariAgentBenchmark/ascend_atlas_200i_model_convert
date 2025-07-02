@@ -46,7 +46,10 @@ class PIMFuseModel(nn.Module):
         q, v, *k = qkvs.chunk(2 + self.num_classes, dim=-1)
         q_mean = pairs * q.mean(dim=1) + (1 - pairs) * q[:, :-1].mean(dim=1)
         ks = torch.stack(k, dim=1)
-        attn_logits = torch.einsum('bd,bnkd->bnk', q_mean, ks)
+        # Expand q_mean to (batch_size, 1, 1, hidden_size) for broadcasting
+        q_mean_expanded = q_mean.unsqueeze(1).unsqueeze(2)
+        # Multiply ks by expanded q_mean and sum over last dimension
+        attn_logits = (ks * q_mean_expanded).sum(dim=-1)
         attn_logits = attn_logits / math.sqrt(q.shape[-1])
         attn_mask = torch.ones_like(attn_logits)
         attn_mask[pairs.squeeze() == 0, :,-1] = 0
