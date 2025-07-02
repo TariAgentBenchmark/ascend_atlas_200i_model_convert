@@ -126,8 +126,33 @@ class AscendInfer:
         acl.rt.reset_device(self.device_id)
         acl.finalize()
 
+def generate_random_data():
+    """Generate random input data for inference"""
+    # Create one sample of random data
+    num_samples = 1
+    seq_length = 5120
+    
+    # Generate random vibration data (3 channels)
+    S_V = np.random.randn(num_samples, 3, seq_length).astype(np.float32)
+    # Generate random pressure data (1 channel)
+    S_P = np.random.randn(num_samples, 1, seq_length).astype(np.float32)
+    S_P1 = S_P.copy()  # Physical model input same as pressure
+    # Pairs are zeros (not used in this model)
+    pairs = np.zeros((num_samples, 2), dtype=np.int64)
+    
+    # Add batch dimension
+    S_V = np.expand_dims(S_V, axis=0)
+    S_P = np.expand_dims(S_P, axis=0)
+    S_P1 = np.expand_dims(S_P1, axis=0)
+    pairs = np.expand_dims(pairs, axis=0)
+    
+    return pairs, S_V, S_P, S_P1, None
+
 def prepare_data(input_dir):
     """Process and prepare test data"""
+    if input_dir is None:
+        return generate_random_data()
+    
     # Get test data
     _, Test_X, _, Test_Y = dataProcessing_3(input_dir)
     
@@ -152,7 +177,7 @@ def prepare_data(input_dir):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run inference on Ascend AI processor')
     parser.add_argument('model_path', type=str, help='Path to the OM model file')
-    parser.add_argument('data_dir', type=str, help='Directory containing input data')
+    parser.add_argument('--data_dir', type=str, default=None, help='Directory containing input data (optional)')
     parser.add_argument('--device_id', type=int, default=0, help='Device ID (default: 0)')
     args = parser.parse_args()
     
@@ -175,5 +200,9 @@ if __name__ == "__main__":
     # Print results
     print(f"Inference time: {inference_time:.4f}s")
     print(f"Predictions: {predictions}")
-    print(f"True labels: {labels}")
-    print(f"Accuracy: {np.mean(predictions == labels):.4f}")
+    
+    if labels is not None:
+        print(f"True labels: {labels}")
+        print(f"Accuracy: {np.mean(predictions == labels):.4f}")
+    else:
+        print("Using randomly generated input data - no true labels available")
