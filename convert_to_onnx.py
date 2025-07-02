@@ -62,7 +62,8 @@ class SimplifiedONNXWrapper(nn.Module):
         q, v, *k = qkvs.chunk(2 + self.model.num_classes, dim=-1)
         q_mean = pairs * q.mean(dim=1) + (1 - pairs) * q[:, :-1].mean(dim=1)
         ks = torch.stack(k, dim=1)
-        attn_logits = torch.einsum('bd,bnkd->bnk', q_mean, ks)
+        q_mean_expanded = q_mean.unsqueeze(1).unsqueeze(2)
+        attn_logits = (ks * q_mean_expanded).sum(dim=-1)
         attn_logits = attn_logits / (q.shape[-1] ** 0.5)  # Use constant instead of math.sqrt
         attn_mask = torch.ones_like(attn_logits)
         attn_mask[pairs.squeeze() == 0, :, -1] = 0
