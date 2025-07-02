@@ -2,7 +2,7 @@
 # run_acl_infer.py
 import numpy as np
 import acl
-import sys
+import argparse
 import os
 import time
 from data_processing_3 import dataProcessing_3, scalar_stand
@@ -150,18 +150,17 @@ def prepare_data(input_dir):
     return pairs, S_V, S_P, S_P1, Test_Y
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python3 run_acl_infer.py <om_model_path> <data_dir>")
-        sys.exit(1)
-    
-    model_path = sys.argv[1]
-    data_dir = sys.argv[2]
+    parser = argparse.ArgumentParser(description='Run inference on Ascend AI processor')
+    parser.add_argument('model_path', type=str, help='Path to the OM model file')
+    parser.add_argument('data_dir', type=str, help='Directory containing input data')
+    parser.add_argument('--device_id', type=int, default=0, help='Device ID (default: 0)')
+    args = parser.parse_args()
     
     # Initialize inference engine
-    ascend_net = AscendInfer(model_path)
+    ascend_net = AscendInfer(args.model_path, args.device_id)
     
     # Prepare data
-    pairs, S_V, S_P, S_P1, labels = prepare_data(data_dir)
+    pairs, S_V, S_P, S_P1, labels = prepare_data(args.data_dir)
     input_data = [pairs, S_V, S_P, S_P1]
     
     # Run inference
