@@ -1,239 +1,164 @@
-#!/usr/bin/env python3
-# run_acl_infer.py
-import numpy as np
 import acl
-import argparse
-import os
-import time
-from data_processing_3 import dataProcessing_3, scalar_stand
+import numpy as np
 
-class AscendInfer:
-    def __init__(self, model_path, device_id=0):
-        self.device_id = device_id
-        self.context = None
-        self.stream = None
-        self.model_id = None
-        self.model_desc = None  # Add model description
-        self.input_dataset = None
-        self.output_dataset = None
-        self.input_buffers = []   # Store input device buffers for freeing later
-        self.output_buffers = []  # Store output device buffers for freeing later
-        self._init_resource(model_path)
+ACL_MEM_MALLOC_HUGE_FIRST = 0
+ACL_MEMCPY_HOST_TO_DEVICE = 1
+ACL_MEMCPY_DEVICE_TO_HOST = 2
 
-    def _init_resource(self, model_path):
-        # Initialize ACL
+
+class CustomModelInference:
+    def __init__(self, model_path):
+        # 初始化函数
+        self.device_id = 0
+
+        # step1: 初始化
         ret = acl.init()
-        assert ret == 0, f"ACL init failed: {ret}"
-        
-        # Set device and create context
+        # 指定运算的Device
         ret = acl.rt.set_device(self.device_id)
-        assert ret == 0, f"Set device failed: {ret}"
-        
-        self.context = acl.rt.create_context(0)
-        self.stream = acl.rt.create_stream()
-        
-        # Load OM model
-        model_path = os.path.realpath(model_path)
+
+        # step2: 加载模型
+        # 加载离线模型文件，返回标识模型的ID
         self.model_id, ret = acl.mdl.load_from_file(model_path)
-        assert ret == 0, f"Model load failed: {ret}"
-        
-        # Create model description
+        # 创建空白模型描述信息，获取模型描述信息的指针地址
         self.model_desc = acl.mdl.create_desc()
+        # 通过模型的ID，将模型的描述信息填充到model_desc
         ret = acl.mdl.get_desc(self.model_desc, self.model_id)
-        assert ret == 0, f"Get model desc failed: {ret}"
-        
-        # Prepare model I/O
-        self._prepare_model_io()
 
-    def _prepare_model_io(self):
-        # Create input dataset
-        self.input_dataset = acl.mdl.create_dataset()
-        num_inputs = acl.mdl.get_num_inputs(self.model_id)
-        
-        for i in range(num_inputs):
-            buffer_size = acl.mdl.get_input_size_by_index(self.model_id, i)
-            buffer, ret = acl.rt.malloc(buffer_size, 0)
-            assert ret == 0, f"Input malloc failed: {ret}"
-            self.input_buffers.append(buffer)  # Store for freeing later
+        # step3：创建输入输出数据集
+        # 创建输入数据集
+        self.input_dataset, self.input_data = self.prepare_dataset("input")
+        # 创建输出数据集
+        self.output_dataset, self.output_data = self.prepare_dataset("output")
+
+    def prepare_dataset(self, io_type):
+        # 准备数据集
+        if io_type == "input":
+            # 获得模型输入的个数
+            io_num = acl.mdl.get_num_inputs(self.model_desc)
+            acl_mdl_get_size_by_index = acl.mdl.get_input_size_by_index
+        else:
+            # 获得模型输出的个数
+            io_num = acl.mdl.get_num_outputs(self.model_desc)
+            acl_mdl_get_size_by_index = acl.mdl.get_output_size_by_index
+        # 创建aclmdlDataset类型的数据，描述模型推理的输入。
+        dataset = acl.mdl.create_dataset()
+        datas = []
+        for i in range(io_num):
+            # 获取所需的buffer内存大小
+            buffer_size = acl_mdl_get_size_by_index(self.model_desc, i)
+            # 申请buffer内存
+            buffer, ret = acl.rt.malloc(buffer_size, ACL_MEM_MALLOC_HUGE_FIRST)
+            # 从内存创建buffer数据
             data_buffer = acl.create_data_buffer(buffer, buffer_size)
-            acl.mdl.add_dataset_buffer(self.input_dataset, data_buffer)
+            # 将buffer数据添加到数据集
+            _, ret = acl.mdl.add_dataset_buffer(dataset, data_buffer)
+            datas.append({"buffer": buffer, "data": data_buffer, "size": buffer_size})
+        return dataset, datas
 
-        # Create output dataset
-        self.output_dataset = acl.mdl.create_dataset()
-        num_outputs = acl.mdl.get_num_outputs(self.model_id)
+    def forward(self, pairs, S_V, S_P, S_P1):
+        # 执行推理任务
+        # 输入数据列表（按照模型输入顺序）
+        inputs = [pairs, S_V, S_P, S_P1]
         
-        for i in range(num_outputs):
-            buffer_size = acl.mdl.get_output_size_by_index(self.model_id, i)
-            buffer, ret = acl.rt.malloc(buffer_size, 0)
-            assert ret == 0, f"Output malloc failed: {ret}"
-            self.output_buffers.append(buffer)  # Store for freeing later
-            data_buffer = acl.create_data_buffer(buffer, buffer_size)
-            acl.mdl.add_dataset_buffer(self.output_dataset, data_buffer)
-
-    def run(self, input_data):
-        # Copy input data to device
-        ACL_MEMCPY_HOST_TO_DEVICE = 1  # Correct constant
-        for i, data in enumerate(input_data):
-            buffer = acl.mdl.get_dataset_buffer(self.input_dataset, i)
-            data_ptr = acl.get_data_buffer_addr(buffer)
-            data_size = acl.get_data_buffer_size(buffer)
-            
-            # Convert numpy data to bytes
-            bytes_data = data.tobytes()
-            assert len(bytes_data) <= data_size, "Input data too large"
-            
-            # Copy to device (use correct constant)
+        # 遍历所有输入，拷贝到对应的buffer内存中
+        input_num = len(inputs)
+        for i in range(input_num):
+            bytes_data = inputs[i].tobytes()
+            bytes_ptr = acl.util.bytes_to_ptr(bytes_data)
+            # 将数据从Host传输到Device
             ret = acl.rt.memcpy(
-                data_ptr, data_size, 
-                bytes_data, len(bytes_data), 
-                ACL_MEMCPY_HOST_TO_DEVICE
-            )
-            assert ret == 0, f"Input copy failed: {ret}"
-
-        # Execute inference
+                self.input_data[i]["buffer"],  # 目标地址 device
+                self.input_data[i]["size"],  # 目标地址大小
+                bytes_ptr,  # 源地址 host
+                len(bytes_data),  # 源地址大小
+                ACL_MEMCPY_HOST_TO_DEVICE,
+            )  # 模式:从host到device
+        
+        # 执行模型推理
         ret = acl.mdl.execute(self.model_id, self.input_dataset, self.output_dataset)
-        assert ret == 0, f"Inference failed: {ret}"
-
-        # Process outputs
-        outputs = []
-        ACL_MEMCPY_DEVICE_TO_HOST = 2  # Correct constant
-        for i in range(acl.mdl.get_dataset_num_buffers(self.output_dataset)):
-            buffer = acl.mdl.get_dataset_buffer(self.output_dataset, i)
-            data_ptr = acl.get_data_buffer_addr(buffer)
-            data_size = acl.get_data_buffer_size(buffer)
-            
-            # Allocate host memory
-            host_buffer, ret = acl.rt.malloc_host(data_size)
-            assert ret == 0, f"Host malloc failed: {ret}"
-            
-            # Copy from device to host (use correct constant)
-            ret = acl.rt.memcpy(
-                host_buffer, data_size,
-                data_ptr, data_size,
-                ACL_MEMCPY_DEVICE_TO_HOST
-            )
-            assert ret == 0, f"Output copy failed: {ret}"
-            
-            # Convert to numpy array (assuming float32 output)
-            np_out = np.frombuffer(host_buffer, dtype=np.float32)
-            outputs.append(np_out.copy())
-            
-            # Free host buffer
-            acl.rt.free_host(host_buffer)
         
-        return outputs
+        # 处理模型推理的输出数据
+        inference_result = []
+        for i, item in enumerate(self.output_data):
+            buffer_host, ret = acl.rt.malloc_host(self.output_data[i]["size"])
+            # 将推理输出数据从Device传输到Host
+            ret = acl.rt.memcpy(
+                buffer_host,  # 目标地址 host
+                self.output_data[i]["size"],  # 目标地址大小
+                self.output_data[i]["buffer"],  # 源地址 device
+                self.output_data[i]["size"],  # 源地址大小
+                ACL_MEMCPY_DEVICE_TO_HOST,
+            )  # 模式：从device到host
+            # 从内存地址获取bytes对象
+            bytes_out = acl.util.ptr_to_bytes(buffer_host, self.output_data[i]["size"])
+            # 按照float32格式将数据转为numpy数组
+            data = np.frombuffer(bytes_out, dtype=np.float32)
+            inference_result.append(data)
+        
+        return inference_result
 
     def __del__(self):
-        # Release resources in reverse order
-        if self.model_id:
-            # Destroy input dataset buffers
-            if self.input_dataset:
-                num_buffers = acl.mdl.get_dataset_num_buffers(self.input_dataset)
-                for i in range(num_buffers):
-                    data_buf = acl.mdl.get_dataset_buffer(self.input_dataset, i)
-                    if data_buf:
-                        acl.destroy_data_buffer(data_buf)
-                acl.mdl.destroy_dataset(self.input_dataset)
-            
-            # Destroy output dataset buffers
-            if self.output_dataset:
-                num_buffers = acl.mdl.get_dataset_num_buffers(self.output_dataset)
-                for i in range(num_buffers):
-                    data_buf = acl.mdl.get_dataset_buffer(self.output_dataset, i)
-                    if data_buf:
-                        acl.destroy_data_buffer(data_buf)
-                acl.mdl.destroy_dataset(self.output_dataset)
-            
-            acl.mdl.unload(self.model_id)
-        
-        # Destroy model description
-        if self.model_desc:
-            acl.mdl.destroy_desc(self.model_desc)
-        
-        if self.stream:
-            acl.rt.destroy_stream(self.stream)
-        if self.context:
-            acl.rt.destroy_context(self.context)
-        acl.rt.reset_device(self.device_id)
-        acl.finalize()
+        # 析构函数 按照初始化资源的相反顺序释放资源
+        # 销毁输入输出数据集
+        for dataset in [self.input_data, self.output_data]:
+            while dataset:
+                item = dataset.pop()
+                ret = acl.destroy_data_buffer(item["data"])  # 销毁buffer数据
+                ret = acl.rt.free(item["buffer"])  # 释放buffer内存
+        ret = acl.mdl.destroy_dataset(self.input_dataset)  # 销毁输入数据集
+        ret = acl.mdl.destroy_dataset(self.output_dataset)  # 销毁输出数据集
+        # 销毁模型描述
+        ret = acl.mdl.destroy_desc(self.model_desc)
+        # 卸载模型
+        ret = acl.mdl.unload(self.model_id)
+        # 释放device
+        ret = acl.rt.reset_device(self.device_id)
+        # acl去初始化
+        ret = acl.finalize()
 
-def generate_random_data():
-    """Generate random input data for inference"""
-    # Create one sample of random data
-    num_samples = 1
-    seq_length = 5120
-    
-    # Generate random vibration data (3 channels)
-    S_V = np.random.randn(num_samples, 3, seq_length).astype(np.float32)
-    # Generate random pressure data (1 channel)
-    S_P = np.random.randn(num_samples, 1, seq_length).astype(np.float32)
-    S_P1 = S_P.copy()  # Physical model input same as pressure
-    # Pairs are zeros (not used in this model)
-    pairs = np.zeros((num_samples, 2), dtype=np.int64)
-    
-    # Add batch dimension
-    S_V = np.expand_dims(S_V, axis=0)
-    S_P = np.expand_dims(S_P, axis=0)
-    S_P1 = np.expand_dims(S_P1, axis=0)
-    pairs = np.expand_dims(pairs, axis=0)
-    
-    return pairs, S_V, S_P, S_P1, None
 
-def prepare_data(input_dir):
-    """Process and prepare test data"""
-    if input_dir is None:
-        return generate_random_data()
+def create_test_inputs(batch_size=1, sequence_length=5120):
+    """创建测试输入数据"""
+    pairs = np.ones((batch_size,), dtype=np.float32)
+    S_V = np.random.randn(batch_size, sequence_length, 3).astype(np.float32)
+    S_P = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
+    S_P1 = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
     
-    # Get test data
-    _, Test_X, _, Test_Y = dataProcessing_3(input_dir)
-    
-    # Standardize data
-    Test_X = Test_X.astype(np.float32)
-    Test_X = scalar_stand(Test_X, Test_X)[1]  # Use test stats for standardization
-    
-    # Split into model inputs
-    S_V = Test_X[:, 0:3, :]  # Vibration data (3 channels)
-    S_P = Test_X[:, 3:4, :]  # Pressure data (1 channel)
-    S_P1 = S_P.copy()        # Physical model input
-    pairs = np.zeros((Test_X.shape[0], 2), dtype=np.int64)
-    
-    # Add batch dimension
-    S_V = np.expand_dims(S_V, axis=0)
-    S_P = np.expand_dims(S_P, axis=0)
-    S_P1 = np.expand_dims(S_P1, axis=0)
-    pairs = np.expand_dims(pairs, axis=0)
-    
-    return pairs, S_V, S_P, S_P1, Test_Y
+    return pairs, S_V, S_P, S_P1
+
+
+def print_results(result):
+    """打印推理结果"""
+    print("======== Inference Results: =============")
+    for i, output in enumerate(result):
+        print(f"Output {i}: shape={output.shape}, dtype={output.dtype}")
+        print(f"Sample values: {output.flatten()[:5]}...")
+        print(f"Min: {np.min(output):.6f}, Max: {np.max(output):.6f}, Mean: {np.mean(output):.6f}")
+        print("-" * 40)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Run inference on Ascend AI processor')
-    parser.add_argument('model_path', type=str, help='Path to the OM model file')
-    parser.add_argument('--data_dir', type=str, default=None, help='Directory containing input data (optional)')
-    parser.add_argument('--device_id', type=int, default=0, help='Device ID (default: 0)')
-    args = parser.parse_args()
+    # 模型路径（请根据实际情况修改）
+    model_path = "./model/your_model.om"
     
-    # Initialize inference engine
-    ascend_net = AscendInfer(args.model_path, args.device_id)
+    # 创建推理对象
+    model = CustomModelInference(model_path)
     
-    # Prepare data
-    pairs, S_V, S_P, S_P1, labels = prepare_data(args.data_dir)
-    input_data = [pairs, S_V, S_P, S_P1]
+    # 创建测试输入数据
+    pairs, S_V, S_P, S_P1 = create_test_inputs()
     
-    # Run inference
-    start_time = time.time()
-    outputs = ascend_net.run(input_data)
-    inference_time = time.time() - start_time
+    print("Input shapes:")
+    print(f"pairs: {pairs.shape}")
+    print(f"S_V: {S_V.shape}")
+    print(f"S_P: {S_P.shape}")
+    print(f"S_P1: {S_P1.shape}")
+    print()
     
-    # Process outputs
-    logits = outputs[0]  # First output is final predictions
-    predictions = np.argmax(logits, axis=-1)
+    # 执行推理
+    result = model.forward(pairs, S_V, S_P, S_P1)
     
-    # Print results
-    print(f"Inference time: {inference_time:.4f}s")
-    print(f"Predictions: {predictions}")
+    # 打印结果
+    print_results(result)
     
-    if labels is not None:
-        print(f"True labels: {labels}")
-        print(f"Accuracy: {np.mean(predictions == labels):.4f}")
-    else:
-        print("Using randomly generated input data - no true labels available")
+    # 清理资源
+    del model 
