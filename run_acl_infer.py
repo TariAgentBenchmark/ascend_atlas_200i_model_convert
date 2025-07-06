@@ -13,8 +13,11 @@ class AscendInfer:
         self.context = None
         self.stream = None
         self.model_id = None
+        self.model_desc = None  # Add model description
         self.input_dataset = None
         self.output_dataset = None
+        self.input_buffers = []   # Store input device buffers for freeing later
+        self.output_buffers = []  # Store output device buffers for freeing later
         self._init_resource(model_path)
 
     def _init_resource(self, model_path):
@@ -34,6 +37,11 @@ class AscendInfer:
         self.model_id, ret = acl.mdl.load_from_file(model_path)
         assert ret == 0, f"Model load failed: {ret}"
         
+        # Create model description
+        self.model_desc = acl.mdl.create_desc()
+        ret = acl.mdl.get_desc(self.model_desc, self.model_id)
+        assert ret == 0, f"Get model desc failed: {ret}"
+        
         # Prepare model I/O
         self._prepare_model_io()
 
@@ -46,6 +54,7 @@ class AscendInfer:
             buffer_size = acl.mdl.get_input_size_by_index(self.model_id, i)
             buffer, ret = acl.rt.malloc(buffer_size, 0)
             assert ret == 0, f"Input malloc failed: {ret}"
+            self.input_buffers.append(buffer)  # Store for freeing later
             data_buffer = acl.create_data_buffer(buffer, buffer_size)
             acl.mdl.add_dataset_buffer(self.input_dataset, data_buffer)
 
@@ -57,11 +66,13 @@ class AscendInfer:
             buffer_size = acl.mdl.get_output_size_by_index(self.model_id, i)
             buffer, ret = acl.rt.malloc(buffer_size, 0)
             assert ret == 0, f"Output malloc failed: {ret}"
+            self.output_buffers.append(buffer)  # Store for freeing later
             data_buffer = acl.create_data_buffer(buffer, buffer_size)
             acl.mdl.add_dataset_buffer(self.output_dataset, data_buffer)
 
     def run(self, input_data):
         # Copy input data to device
+        ACL_MEMCPY_HOST_TO_DEVICE = 1  # Correct constant
         for i, data in enumerate(input_data):
             buffer = acl.mdl.get_dataset_buffer(self.input_dataset, i)
             data_ptr = acl.get_data_buffer_addr(buffer)
@@ -71,11 +82,11 @@ class AscendInfer:
             bytes_data = data.tobytes()
             assert len(bytes_data) <= data_size, "Input data too large"
             
-            # Copy to device
+            # Copy to device (use correct constant)
             ret = acl.rt.memcpy(
                 data_ptr, data_size, 
                 bytes_data, len(bytes_data), 
-                2  # ACL_MEMCPY_HOST_TO_DEVICE
+                ACL_MEMCPY_HOST_TO_DEVICE
             )
             assert ret == 0, f"Input copy failed: {ret}"
 
@@ -85,6 +96,7 @@ class AscendInfer:
 
         # Process outputs
         outputs = []
+        ACL_MEMCPY_DEVICE_TO_HOST = 2  # Correct constant
         for i in range(acl.mdl.get_dataset_num_buffers(self.output_dataset)):
             buffer = acl.mdl.get_dataset_buffer(self.output_dataset, i)
             data_ptr = acl.get_data_buffer_addr(buffer)
@@ -94,11 +106,11 @@ class AscendInfer:
             host_buffer, ret = acl.rt.malloc_host(data_size)
             assert ret == 0, f"Host malloc failed: {ret}"
             
-            # Copy from device to host
+            # Copy from device to host (use correct constant)
             ret = acl.rt.memcpy(
                 host_buffer, data_size,
                 data_ptr, data_size,
-                4  # ACL_MEMCPY_DEVICE_TO_HOST
+                ACL_MEMCPY_DEVICE_TO_HOST
             )
             assert ret == 0, f"Output copy failed: {ret}"
             
@@ -114,11 +126,30 @@ class AscendInfer:
     def __del__(self):
         # Release resources in reverse order
         if self.model_id:
+            # Destroy input dataset buffers
+            if self.input_dataset:
+                num_buffers = acl.mdl.get_dataset_num_buffers(self.input_dataset)
+                for i in range(num_buffers):
+                    data_buf = acl.mdl.get_dataset_buffer(self.input_dataset, i)
+                    if data_buf:
+                        acl.destroy_data_buffer(data_buf)
+                acl.mdl.destroy_dataset(self.input_dataset)
+            
+            # Destroy output dataset buffers
+            if self.output_dataset:
+                num_buffers = acl.mdl.get_dataset_num_buffers(self.output_dataset)
+                for i in range(num_buffers):
+                    data_buf = acl.mdl.get_dataset_buffer(self.output_dataset, i)
+                    if data_buf:
+                        acl.destroy_data_buffer(data_buf)
+                acl.mdl.destroy_dataset(self.output_dataset)
+            
             acl.mdl.unload(self.model_id)
-        if self.input_dataset:
-            acl.mdl.destroy_dataset(self.input_dataset)
-        if self.output_dataset:
-            acl.mdl.destroy_dataset(self.output_dataset)
+        
+        # Destroy model description
+        if self.model_desc:
+            acl.mdl.destroy_desc(self.model_desc)
+        
         if self.stream:
             acl.rt.destroy_stream(self.stream)
         if self.context:
