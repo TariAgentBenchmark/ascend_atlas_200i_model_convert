@@ -37,10 +37,10 @@ if __name__ == '__main__':
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    Train_P, Train_V, Train_Yf, Test_P, Test_V, Test_Yf=dataProcessing(file_path="D:/process date/data_2_S1")
+    Train_P, Train_V, Train_Yf, Test_P, Test_V, Test_Yf=dataProcessing(file_path="data/data_2_S1")
     Train_V_std, Test_V_std = standardize_with_train(Train_V, Test_V)
     Train_P_std, Test_P_std = standardize_with_train(Train_P, Test_P)
-    train_x, test_x, train_y, test_y = dataProcessing_3(file_path="D:/process date/data_1_S1")
+    train_x, test_x, train_y, test_y = dataProcessing_3(file_path="D:/data/data_1_S1")
     train_x = train_x.reshape(-1, train_x.shape[2])
     train_x = np.expand_dims(train_x, axis=-1)
     test_x = test_x.reshape(-1, test_x.shape[2])
