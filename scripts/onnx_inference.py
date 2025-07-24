@@ -121,6 +121,7 @@ def run_onnx_inference(session, input_names, output_names, data, batch_size):
     
     all_predictions = []
     all_confidences = []
+    all_logits = []
     inference_times = []
     
     num_samples = len(data)
@@ -147,6 +148,9 @@ def run_onnx_inference(session, input_names, output_names, data, batch_size):
         # 处理输出
         pred_final = outputs[0]  # 假设第一个输出是预测结果
         
+        # 保存原始logits
+        all_logits.extend(pred_final)
+        
         # 获取预测类别
         pred_classes = np.argmax(pred_final, axis=1)
         
@@ -162,7 +166,7 @@ def run_onnx_inference(session, input_names, output_names, data, batch_size):
         if batch_idx % 10 == 0:
             print(f"Processed batch {batch_idx}/{num_batches}")
     
-    return all_predictions, all_confidences, inference_times
+    return all_predictions, all_confidences, all_logits, inference_times
 
 
 def calculate_metrics(predictions, labels, confidences, inference_times, label_names):
@@ -216,7 +220,7 @@ def calculate_metrics(predictions, labels, confidences, inference_times, label_n
     return metrics
 
 
-def save_results_to_excel(predictions, labels, confidences, filenames, metrics, label_names, output_path):
+def save_results_to_excel(predictions, labels, confidences, logits, filenames, metrics, label_names, output_path):
     """保存结果到Excel文件"""
     print(f"Saving results to: {output_path}")
     
@@ -251,6 +255,11 @@ def save_results_to_excel(predictions, labels, confidences, filenames, metrics, 
             if i < len(confidences[0]) if confidences else 0:  # 确保置信度数组有足够的元素
                 detailed_results[f'Confidence_Class_{class_name}'] = [conf[i] if i < len(conf) else 0.0 for conf in confidences]
         
+        # 添加logits数据
+        logits_array = np.array(logits)
+        for i in range(logits_array.shape[1]):
+            detailed_results[f'Logit_Class_{i}'] = logits_array[:, i]
+        
         detailed_results.to_excel(writer, sheet_name='详细结果', index=False)
         
         # 类别准确率表 - 只包含实际存在的类别
@@ -282,6 +291,16 @@ def save_results_to_excel(predictions, labels, confidences, filenames, metrics, 
         
         confidence_df = pd.DataFrame(confidence_data)
         confidence_df.to_excel(writer, sheet_name='置信度统计', index=False)
+        
+        # Logits数据表
+        logits_df = pd.DataFrame(logits, columns=[f'Class_{i}_Logit' for i in range(len(logits[0]))])
+        logits_df['Sample'] = filenames
+        logits_df['True_Label'] = labels
+        logits_df['Predicted_Label'] = predictions
+        # 重新排列列的顺序
+        cols = ['Sample', 'True_Label', 'Predicted_Label'] + [f'Class_{i}_Logit' for i in range(len(logits[0]))]
+        logits_df = logits_df[cols]
+        logits_df.to_excel(writer, sheet_name='原始Logits', index=False)
     
     print(f"Results saved successfully to {output_path}")
 
@@ -313,7 +332,7 @@ def main():
         filenames = filenames[:max_samples]
     
     # 运行推理
-    predictions, confidences, inference_times = run_onnx_inference(
+    predictions, confidences, logits, inference_times = run_onnx_inference(
         session, input_names, output_names, test_data, args.batch_size
     )
     
@@ -333,7 +352,7 @@ def main():
         print(f"  Class {class_name}: {acc:.4f}")
     
     # 保存结果
-    save_results_to_excel(predictions, test_labels, confidences, filenames, metrics, label_names, args.output)
+    save_results_to_excel(predictions, test_labels, confidences, logits, filenames, metrics, label_names, args.output)
     
     print(f"\nResults saved to: {args.output}")
 
