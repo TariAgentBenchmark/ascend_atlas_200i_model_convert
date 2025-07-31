@@ -100,7 +100,13 @@ def dataProcessing_3(file_path,  length=5120, use_sliding_window=True, step_size
         return Data_Samples, Labels, Test_DataSamples, Test_Labels
     train_data = capture(file_path, train_filenames, start_row=0, end_row=614400)
     Train_X, Train_Y, Test_X, Test_Y = slice(train_data)
-    return Train_X, Test_X, Train_Y, Test_Y
+    Train_XC=Train_X.copy()
+    Test_XC=Test_X.copy()
+    Train_XC_complex = Train_XC + 0j
+    Train_X_fft = np.fft.fft(Train_XC_complex)
+    Test_XC_complex = Test_XC + 0j
+    Test_X_fft = np.fft.fft(Test_XC_complex)
+    return Train_X, Test_X, Train_Y, Test_Y,Train_X_fft,Test_X_fft
 
 def scalar_stand(Train_X, Test_X):
     mean = np.mean(Train_X, axis=(0, 1), keepdims=True)
