@@ -21,15 +21,16 @@ class PIMFuseModel(nn.Module):
         self.fuse_model_shared = nn.Linear(in_features=hidden_size, out_features=num_classes)
         self.attn_proj = nn.Linear(hidden_size, (2 + num_classes) * hidden_size)
         self.final_pred_fc = nn.Linear(hidden_size, num_classes)
-    def forward(self, pairs, S_V, S_P,S_P1):
+    def forward(self, pairs, S_V, S_P,S_P1,S_P1_fft):
         S_V=S_V.permute(0, 2, 1)
         S_P=S_P.permute(0, 2, 1)
         S_P1=S_P1.permute(0, 2, 1)
+        S_P1_fft=S_P1_fft.permute(0, 2, 1).abs()
         feat_vibration_shared, feat_vibration_distinct, pred_vibration = self.vibration_model(S_V)
         feat_pressure_shared, feat_pressure_distinct, pred_pressure = self.pressure_model(S_P)
         feat_vibration_shared = self.shared_project(feat_vibration_shared)
         feat_pressure_shared = self.shared_project(feat_pressure_shared)
-        y_30,y_pred_phy= self.physical_model(S_P1)
+        y_30,y_pred_phy= self.physical_model(S_P1,S_P1_fft)
 
         pairs = pairs.unsqueeze(1)
 
@@ -46,10 +47,7 @@ class PIMFuseModel(nn.Module):
         q, v, *k = qkvs.chunk(2 + self.num_classes, dim=-1)
         q_mean = pairs * q.mean(dim=1) + (1 - pairs) * q[:, :-1].mean(dim=1)
         ks = torch.stack(k, dim=1)
-        # Expand q_mean to (batch_size, 1, 1, hidden_size) for broadcasting
-        q_mean_expanded = q_mean.unsqueeze(1).unsqueeze(2)
-        # Multiply ks by expanded q_mean and sum over last dimension
-        attn_logits = (ks * q_mean_expanded).sum(dim=-1)
+        attn_logits = torch.einsum('bd,bnkd->bnk', q_mean, ks)
         attn_logits = attn_logits / math.sqrt(q.shape[-1])
         attn_mask = torch.ones_like(attn_logits)
         attn_mask[pairs.squeeze() == 0, :,-1] = 0
@@ -72,7 +70,8 @@ class PIMFuseModel(nn.Module):
             'attn_weights': attn_weights,
             'y_pred_phy': y_pred_phy,
             'y_30': y_30,
-            'S_P1': S_P1
+            'S_P1': S_P1,
+            'S_P1_fft': S_P1_fft
         }
         return outputs
 

@@ -121,6 +121,7 @@ def collect_data1(batch):
     S_P = data[:, :, 0:1]
     S_V = data[:, :, 1:4]
     S_P1= data[:, :, 4:5]
+    S_P1_fft=data[:, :, 5:6]
 
     s = np.array([0,0,0])
     s1 = np.broadcast_to(s, (5120, 3))
@@ -129,7 +130,7 @@ def collect_data1(batch):
 
     pairs = ~is_zero
 
-    return [y, S_P, S_V, pairs,S_P1]
+    return [y, S_P, S_V, pairs,S_P1, S_P1_fft]
 
 
 

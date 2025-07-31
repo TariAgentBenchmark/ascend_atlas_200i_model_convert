@@ -93,11 +93,10 @@ class PhyModel_1(nn.Module):
         self.global_pool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Linear(30, num_classes)
 
-    def forward(self, x):
-        inputs1 = torch.fft.fft(torch.complex(x, torch.zeros_like(x))).abs()
+    def forward(self, x,x_fft):
         positions = [10, 20, 29, 39, 49, 59, 68, 79, 89, 98, 107, 120, 147, 294, 437, 581, 732, 880, 1027, 1180, 1324,
                      137, 284, 427, 571, 722, 870, 1017, 1170, 1314]  # S1
-        extracted_values = inputs1[:, :, positions]
+        extracted_values = x_fft[:, :, positions]
         extracted_values = extracted_values.view(x.size(0), 30)
         x = self.conv1(x)
         x = self.conv2(x)

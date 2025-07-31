@@ -113,7 +113,7 @@ class PIMFuseTrainer(pl.LightningModule):
         dict2 = {0: 147, 1: 294, 2: 437, 3: 581, 4: 732, 5: 880, 6: 1027, 7: 1180, 8: 1324}#S1
 
         x_complex = data.type(torch.complex64)
-        yf = torch.fft.fft(x_complex).to(device)
+        yf = x_complex.to(device)
         for m in range(len(dict1)):
             angle = torch.atan2(-yf[:, dict1[m]].imag, yf[:, dict1[m]].real).to(device)
             angle = angle.view(-1, 1)
@@ -134,7 +134,7 @@ class PIMFuseTrainer(pl.LightningModule):
 
 
     def custom_loss(self, model_output):
-        ddd=model_output['S_P1']
+        ddd=model_output['S_P1_fft']
         ddd = ddd.view(ddd.size(0), 5120)
         reconstructed_signal = self.pressure_pulsation_model(model_output['y_30'], ddd)
         reconstructed_signal = reconstructed_signal.unsqueeze(1)
@@ -219,22 +219,23 @@ class PIMFuseTrainer(pl.LightningModule):
         return loss_total
 
     def _get_batch_data(self,batch):
-        y,S_P,S_V,pairs,S_P1=batch
+        y,S_P,S_V,pairs,S_P1,S_P1_fft=batch
         y=torch.from_numpy(y).long().to(self.device)
         S_V = torch.from_numpy(S_V).float().to(self.device)
         S_P = torch.from_numpy(S_P).float().to(self.device)
         S_P1 = torch.from_numpy(S_P1).float().to(self.device)
+        S_P1_fft=torch.from_numpy(S_P1_fft).float().to(self.device)
         pairs = torch.FloatTensor(pairs).to(self.device)
-        return y,S_P,S_V,pairs,S_P1
+        return y,S_P,S_V,pairs,S_P1,S_P1_fft
 
     def training_step(self, batch, batch_idx):
-        y,S_P,S_V,pairs,S_P1 = self._get_batch_data(batch)
-        out = self.model(pairs, S_V, S_P,S_P1)
+        y,S_P,S_V,pairs,S_P1,S_P1_fft = self._get_batch_data(batch)
+        out = self.model(pairs, S_V, S_P,S_P1,S_P1_fft)
         return self._compute_and_log_loss(out, y_gt=y, pairs=pairs)
 
     def validation_step(self, batch, batch_idx):
-        y,S_P,S_V,pairs,S_P1 = self._get_batch_data(batch)
-        out = self.model(pairs, S_V, S_P,S_P1)
+        y,S_P,S_V,pairs,S_P1,S_P1_fft = self._get_batch_data(batch)
+        out = self.model(pairs, S_V, S_P,S_P1,S_P1_fft)
         loss = self._compute_and_log_loss(out, y_gt=y, pairs=pairs, mode='val')
         pred_final = out['pred_final']
         self.val_preds['final'].append(pred_final)
@@ -273,8 +274,8 @@ class PIMFuseTrainer(pl.LightningModule):
         self.val_labels.clear()
 
     def test_step(self, batch, batch_idx):
-        y, S_P, S_V, pairs,S_P1 = self._get_batch_data(batch)
-        out = self.model(pairs,S_V,S_P,S_P1)
+        y, S_P, S_V, pairs,S_P1,S_P1_fft = self._get_batch_data(batch)
+        out = self.model(pairs,S_V,S_P,S_P1,S_P1_fft)
         pred_final = out['pred_final']
         self.test_preds.append(pred_final)
         self.test_labels.append(y)
