@@ -53,8 +53,8 @@ def load_and_process_data(data_path):
     # 检查数据路径
     if not os.path.exists(data_path):
         print(f"Warning: Data path {data_path} does not exist. Creating dummy data for testing.")
-        # 创建虚拟数据
-        dummy_data = np.random.randn(80, 5120, 5)  # 80个样本，5120长度，5个特征
+        # 创建虚拟数据 (现在包含6个特征: pressure, vibration(3), physical, physical_fft)
+        dummy_data = np.random.randn(80, 5120, 6)  # 80个样本，5120长度，6个特征(包含FFT)
         dummy_labels = np.random.randint(0, 9, 80)  # 80个标签
         return dummy_data, dummy_labels, ["dummy_file"] * 80
     
@@ -68,14 +68,16 @@ def load_and_process_data(data_path):
         # 加载data_1_S1数据
         data_1_path = os.path.join(data_path, "data_1_S1")
         if os.path.exists(data_1_path):
-            train_x, test_x, train_y, test_y = dataProcessing_3(file_path=data_1_path)
+            train_x, test_x, train_y, test_y, train_x_fft, test_x_fft = dataProcessing_3(file_path=data_1_path)
             train_x = train_x.reshape(-1, train_x.shape[2])
             train_x = np.expand_dims(train_x, axis=-1)
             test_x = test_x.reshape(-1, test_x.shape[2])
             test_x = np.expand_dims(test_x, axis=-1)
+            test_x_fft = test_x_fft.reshape(-1, test_x_fft.shape[2])
+            test_x_fft = np.expand_dims(test_x_fft, axis=-1)
             
-            # 合并数据
-            Test_x = np.concatenate((Test_P_std, Test_V_std, test_x), axis=2)
+            # 合并数据 (包含FFT数据)
+            Test_x = np.concatenate((Test_P_std, Test_V_std, test_x, test_x_fft), axis=2)
             Test_Y = Test_Yf
             
             print(f"Data loaded successfully. Test samples: {len(Test_x)}")
@@ -84,7 +86,7 @@ def load_and_process_data(data_path):
     
     # 如果找不到数据，创建虚拟数据
     print("Warning: Required data folders not found. Creating dummy data for testing.")
-    dummy_data = np.random.randn(80, 5120, 5)
+    dummy_data = np.random.randn(80, 5120, 6)
     dummy_labels = np.random.randint(0, 9, 80)
     filenames = [f"dummy_{i:04d}" for i in range(80)]
     return dummy_data, dummy_labels, filenames
@@ -108,10 +110,10 @@ def run_inference(model, data_loader, device, label_names):
             start_time = time.time()
             
             # 获取批次数据
-            y, S_P, S_V, pairs, S_P1 = model._get_batch_data(batch)
+            y, S_P, S_V, pairs, S_P1, S_P1_fft = model._get_batch_data(batch)
             
             # 前向传播
-            output = model.model(pairs, S_V, S_P, S_P1)
+            output = model.model(pairs, S_V, S_P, S_P1, S_P1_fft)
             
             # 获取预测结果
             pred_final = output['pred_final']

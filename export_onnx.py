@@ -7,7 +7,7 @@ def test_onnx_model():
     
     # Load the ONNX model
     try:
-        session = ort.InferenceSession("model_simplified.onnx")
+        session = ort.InferenceSession("model.onnx")
         print("✓ ONNX model loaded successfully")
         
         # Print model info
@@ -36,6 +36,7 @@ def test_onnx_model():
         S_V = np.random.randn(batch_size, sequence_length, 3).astype(np.float32)
         S_P = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
         S_P1 = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
+        S_P1_fft = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
         
         # Run inference
         outputs = session.run(
@@ -44,7 +45,8 @@ def test_onnx_model():
                 'pairs': pairs,
                 'S_V': S_V, 
                 'S_P': S_P,
-                'S_P1': S_P1
+                'S_P1': S_P1,
+                'S_P1_fft': S_P1_fft
             }
         )
         
@@ -62,13 +64,13 @@ def compare_pytorch_vs_onnx():
     """Compare PyTorch model output with ONNX model output"""
     try:
         # Load ONNX model
-        session = ort.InferenceSession("model_simplified.onnx")
+        session = ort.InferenceSession("model.onnx")
         
         # Load PyTorch model
-        from convert_to_onnx import SimplifiedONNXWrapper, PIMFuseTrainer
+        from trainer import PIMFuseTrainer
         from argparse import Namespace
         
-        checkpoint = torch.load("lightning_logs/version_0/checkpoints/epoch=68-step=68.ckpt", 
+        checkpoint = torch.load("lightning_logs/version_0/checkpoints/epoch=150-step=150.ckpt", 
                                map_location=torch.device('cpu'))
         hparams = checkpoint['hyper_parameters']
         args = Namespace(**hparams)
@@ -77,7 +79,8 @@ def compare_pytorch_vs_onnx():
         model.load_state_dict(checkpoint['state_dict'])
         model.eval()
         
-        pytorch_model = SimplifiedONNXWrapper(model.model)
+        # Use original model directly - no wrapper needed
+        pytorch_model = model.model
         pytorch_model.eval()
         
         # Create test inputs
@@ -89,26 +92,36 @@ def compare_pytorch_vs_onnx():
         S_P_torch = torch.randn(batch_size, sequence_length, 1, dtype=torch.float32)
         S_P1_torch = torch.randn(batch_size, sequence_length, 1, dtype=torch.float32)
         
+        # Create realistic FFT test data for comparison
+        S_P1_fft_real = torch.randn(batch_size, sequence_length, 1, dtype=torch.float32)
+        S_P1_fft_imag = torch.randn(batch_size, sequence_length, 1, dtype=torch.float32)
+        S_P1_fft_torch_complex = torch.complex(S_P1_fft_real, S_P1_fft_imag)
+        
+        # For ONNX model: compute magnitude manually to match what model expects
+        S_P1_fft_magnitude = torch.sqrt(S_P1_fft_real**2 + S_P1_fft_imag**2)
+        
         # Convert to numpy for ONNX
         pairs_np = pairs_torch.numpy()
         S_V_np = S_V_torch.numpy()
         S_P_np = S_P_torch.numpy()
         S_P1_np = S_P1_torch.numpy()
+        S_P1_fft_np = S_P1_fft_magnitude.numpy()  # magnitude data for ONNX
         
         # PyTorch inference
         with torch.no_grad():
-            pytorch_output = pytorch_model(pairs_torch, S_V_torch, S_P_torch, S_P1_torch)
+            pytorch_output = pytorch_model(pairs_torch, S_V_torch, S_P_torch, S_P1_torch, S_P1_fft_torch_complex)
         
         # ONNX inference
         onnx_output = session.run(None, {
             'pairs': pairs_np,
             'S_V': S_V_np,
             'S_P': S_P_np, 
-            'S_P1': S_P1_np
+            'S_P1': S_P1_np,
+            'S_P1_fft': S_P1_fft_np
         })[0]
         
-        # Compare outputs
-        pytorch_np = pytorch_output.numpy()
+        # Compare outputs  
+        pytorch_np = pytorch_output['pred_final'].numpy()
         max_diff = np.max(np.abs(pytorch_np - onnx_output))
         mean_diff = np.mean(np.abs(pytorch_np - onnx_output))
         
