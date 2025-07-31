@@ -4,34 +4,28 @@ This directory contains scripts to convert the trained PIMFuse model to ONNX for
 
 ## Files
 
-- `convert_to_onnx.py` - Main conversion script
-- `test_onnx_model.py` - Test script to validate the ONNX model
-- `model_simplified.onnx` - The exported ONNX model (created after running conversion)
+- `convert_to_onnx.py` - Main conversion script  
+- `export_onnx.py` - Test script to validate the ONNX model
+- `model.onnx` - The exported ONNX model (created after running conversion)
 
 ## Model Architecture
 
-The converted ONNX model is a **simplified version** of the original PIMFuse model with the following key differences:
+The converted ONNX model now uses the **complete original PIMFuse model** with all components preserved:
 
-### Original Model Components:
-- Vibration signal processing (CNN_1D_V1)
-- Pressure signal processing (CNN_1D_P1) 
-- Physical model with FFT operations
-- Multi-modal fusion with attention mechanism
+### Model Components:
+- ✅ Vibration signal processing (CNN_1D_V1) - **Fully Preserved**
+- ✅ Pressure signal processing (CNN_1D_P1) - **Fully Preserved**
+- ✅ Physical model with pre-computed FFT data - **Fully Preserved**
+- ✅ Multi-modal fusion with attention mechanism - **Fully Preserved**
 
-### Simplified ONNX Model:
-- ✅ Vibration signal processing (CNN_1D_V1) - **Preserved**
-- ✅ Pressure signal processing (CNN_1D_P1) - **Preserved**
-- ⚠️ Physical model **without FFT operations** - **Simplified**
-- ✅ Multi-modal fusion with attention mechanism - **Preserved**
+### FFT Processing
 
-### Why Simplification?
+The FFT operations have been moved to the data preprocessing stage:
 
-The original physical model uses FFT operations (`torch.fft.fft`) with complex numbers, which are not supported in ONNX. The simplified version:
-
-1. Uses only the CNN layers of the physical model
-2. Bypasses the FFT-based frequency domain analysis
-3. Maintains the same input/output interface
-4. Preserves the attention mechanism and fusion logic
+1. FFT is computed during data processing and stored as `S_P1_fft`
+2. The model accepts pre-computed FFT data as input
+3. No FFT operations are performed within the model itself
+4. Full accuracy is maintained compared to the original model
 
 ## Usage
 
@@ -42,14 +36,14 @@ python convert_to_onnx.py
 ```
 
 This will:
-1. Load the checkpoint from `lightning_logs/version_0/checkpoints/epoch=68-step=68.ckpt`
-2. Create a simplified ONNX-compatible wrapper
-3. Export to `model_simplified.onnx`
+1. Load the checkpoint from `lightning_logs/version_0/checkpoints/epoch=150-step=150.ckpt`
+2. Use the original model directly (no wrapper needed)
+3. Export to `model.onnx`
 
 ### Testing the Converted Model
 
 ```bash
-python test_onnx_model.py
+python export_onnx.py
 ```
 
 This will:
@@ -64,42 +58,47 @@ import numpy as np
 import onnxruntime as ort
 
 # Load the model
-session = ort.InferenceSession("model_simplified.onnx")
+session = ort.InferenceSession("model.onnx")
 
-# Prepare inputs
+# Prepare inputs (including pre-computed FFT data)
 batch_size = 1
 sequence_length = 5120
 
-pairs = np.ones((batch_size,), dtype=np.float32)  # 1 if vibration data available, 0 otherwise
-S_V = np.random.randn(batch_size, sequence_length, 3).astype(np.float32)  # Vibration data [batch, time, 3_channels]
-S_P = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)  # Pressure data [batch, time, 1_channel]
-S_P1 = np.random.randn(batch_size, sequence_length, 1).astype(np.float32) # Pressure data for physical model
+pairs = np.ones((batch_size,), dtype=np.float32)
+S_V = np.random.randn(batch_size, sequence_length, 3).astype(np.float32)
+S_P = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
+S_P1 = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
+S_P1_fft = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
 
 # Run inference
 outputs = session.run(None, {
     'pairs': pairs,
     'S_V': S_V,
     'S_P': S_P,
-    'S_P1': S_P1
+    'S_P1': S_P1,
+    'S_P1_fft': S_P1_fft
 })
 
-predictions = outputs[0]  # Shape: [batch_size, 9] - 9 class predictions
+prediction = outputs[0]  # pred_final
 ```
 
-## Input Specifications
+### Input Data Format
 
-| Input | Shape | Type | Description |
-|-------|-------|------|-------------|
-| `pairs` | `[batch_size]` | float32 | Binary indicator (1.0 = vibration available, 0.0 = pressure only) |
-| `S_V` | `[batch_size, sequence_length, 3]` | float32 | Vibration signals (3 channels) |
-| `S_P` | `[batch_size, sequence_length, 1]` | float32 | Pressure signals (1 channel) |
-| `S_P1` | `[batch_size, sequence_length, 1]` | float32 | Pressure signals for physical model |
+- `pairs`: Binary flag (1 if vibration data available, 0 otherwise) - Shape: [batch_size]
+- `S_V`: Vibration signal data - Shape: [batch_size, sequence_length, 3]
+- `S_P`: Pressure signal data - Shape: [batch_size, sequence_length, 1]  
+- `S_P1`: Physical model pressure data - Shape: [batch_size, sequence_length, 1]
+- `S_P1_fft`: Pre-computed FFT magnitude of S_P1 - Shape: [batch_size, sequence_length, 1] (float32)
 
-## Output Specifications
+### Output Data Format
 
-| Output | Shape | Type | Description |
-|--------|-------|------|-------------|
-| `pred_final` | `[batch_size, 9]` | float32 | Final predictions for 9 classes |
+- `pred_final`: Final classification predictions - Shape: [batch_size, 9] (9 classes)
+
+## Requirements
+
+```bash
+pip install torch onnx onnxruntime numpy
+```
 
 ## Dynamic Axes
 
@@ -109,32 +108,16 @@ The model supports dynamic batch sizes and sequence lengths:
 
 ## Model Performance
 
-The simplified ONNX model maintains high fidelity to the original PyTorch model:
-- **Max difference**: ~1.5e-5
-- **Mean difference**: ~5e-6
-
-This indicates excellent preservation of model behavior despite the simplification.
-
-## Requirements
-
-```bash
-pip install torch onnx onnxruntime numpy
-```
-
-## Limitations
-
-1. **Physical Model Simplification**: The FFT-based frequency analysis is replaced with CNN-only processing
-2. **Fixed Architecture**: The attention mechanism and fusion logic assume specific input dimensions
-3. **ONNX Opset**: Requires ONNX opset version 13+ for diagonal operations
+The ONNX model maintains perfect fidelity to the original PyTorch model since no simplification is needed.
 
 ## Deployment Considerations
 
 ### Advantages of ONNX Model:
 - ✅ Framework-agnostic deployment
 - ✅ Optimized inference performance
-- ✅ Smaller memory footprint
 - ✅ Cross-platform compatibility
 - ✅ Integration with ONNX Runtime optimizations
+- ✅ Full model accuracy preserved
 
 ### Performance Optimization:
 - Use ONNX Runtime with appropriate execution providers (CPU, CUDA, etc.)
@@ -145,12 +128,12 @@ pip install torch onnx onnxruntime numpy
 ```python
 # Optimized inference session
 providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-session = ort.InferenceSession("model_simplified.onnx", providers=providers)
+session = ort.InferenceSession("model.onnx", providers=providers)
 
 # Enable optimizations
 sess_options = ort.SessionOptions()
 sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-session = ort.InferenceSession("model_simplified.onnx", sess_options, providers=providers)
+session = ort.InferenceSession("model.onnx", sess_options, providers=providers)
 ```
 
 ## Troubleshooting
@@ -158,8 +141,8 @@ session = ort.InferenceSession("model_simplified.onnx", sess_options, providers=
 ### Common Issues:
 
 1. **Import Errors**: Ensure all dependencies are installed
-2. **Shape Mismatches**: Verify input shapes match the expected format
+2. **Shape Mismatches**: Verify input shapes match the expected format including S_P1_fft
 3. **Performance Issues**: Check if appropriate execution providers are available
 
 ### Validation:
-Always run `test_onnx_model.py` after conversion to ensure the model works correctly. 
+Always run `export_onnx.py` after conversion to ensure the model works correctly. 

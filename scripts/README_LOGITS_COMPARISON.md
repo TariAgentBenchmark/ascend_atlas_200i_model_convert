@@ -35,19 +35,19 @@ Excel文件包含以下表格：
 ```bash
 # PyTorch推理
 python scripts/pytorch_inference.py \
-    --model-path path/to/model.ckpt \
+    --model-path lightning_logs/version_0/checkpoints/epoch=150-step=150.ckpt \
     --data-path ./data \
-    --output pytorch_results.xlsx \
+    --output output/pytorch_results.xlsx \
     --batch-size 8 \
-    --max-batches 10
+    --max-batches 100
 
 # ONNX推理
 python scripts/onnx_inference.py \
-    --model-path path/to/model.onnx \
+    --model-path model.onnx \
     --data-path ./data \
-    --output onnx_results.xlsx \
+    --output output/onnx_results.xlsx \
     --batch-size 8 \
-    --max-batches 10
+    --max-batches 100
 
 # ACL推理
 python scripts/acl_inference.py \
