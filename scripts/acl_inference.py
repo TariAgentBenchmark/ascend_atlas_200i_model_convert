@@ -124,8 +124,8 @@ def load_and_process_data(data_path):
     # 检查数据路径
     if not os.path.exists(data_path):
         print(f"Warning: Data path {data_path} does not exist. Creating dummy data for testing.")
-        # 创建虚拟数据 (现在包含6个特征: pressure, vibration(3), physical, physical_fft)
-        dummy_data = np.random.randn(80, 5120, 6).astype(np.float32)
+        # 创建虚拟数据 (现在包含7个特征: pressure, vibration(3), physical, physical_fft_real, physical_fft_imag)
+        dummy_data = np.random.randn(80, 5120, 7).astype(np.float32)
         dummy_labels = np.random.randint(0, 9, 80)
         return dummy_data, dummy_labels, ["dummy_file"] * 80
     
@@ -147,8 +147,12 @@ def load_and_process_data(data_path):
             test_x_fft = test_x_fft.reshape(-1, test_x_fft.shape[2])
             test_x_fft = np.expand_dims(test_x_fft, axis=-1)
             
-            # 合并数据 (包含FFT数据)
-            Test_x = np.concatenate((Test_P_std, Test_V_std, test_x, test_x_fft), axis=2)
+            # 分离FFT的实部和虚部以避免复数转换丢失信息
+            test_x_fft_real = np.real(test_x_fft).astype(np.float32)
+            test_x_fft_imag = np.imag(test_x_fft).astype(np.float32)
+            
+            # 合并数据 (包含FFT实部和虚部)
+            Test_x = np.concatenate((Test_P_std, Test_V_std, test_x, test_x_fft_real, test_x_fft_imag), axis=2)
             Test_Y = Test_Yf
             
             # 确保数据类型正确
@@ -168,12 +172,32 @@ def load_and_process_data(data_path):
 
 def prepare_acl_inputs(data_batch):
     """准备ACL模型输入"""
+    # 输入数据shape: [batch, sequence_length, features]
+    # features: [pressure(1), vibration(3), physical(1), physical_fft_real(1), physical_fft_imag(1)]
+    
     batch_size = data_batch.shape[0]
     
     # 分离数据
-    S_P = data_batch[:, :, 0:1]  # 压力数据
-    S_V = data_batch[:, :, 1:4]  # 振动数据
-    S_P1 = data_batch[:, :, 4:5]  # 物理数据
+    S_P = data_batch[:, :, 0:1]  # 压力数据 [batch, seq_len, 1]
+    S_V = data_batch[:, :, 1:4]  # 振动数据 [batch, seq_len, 3]
+    S_P1 = data_batch[:, :, 4:5]  # 物理数据 [batch, seq_len, 1]
+    
+    # 处理FFT数据 - 如果是7维，说明包含实部和虚部
+    if data_batch.shape[2] >= 7:
+        S_P1_fft_real = data_batch[:, :, 5:6]  # FFT实部 [batch, seq_len, 1]
+        S_P1_fft_imag = data_batch[:, :, 6:7]  # FFT虚部 [batch, seq_len, 1]
+        
+        # 计算FFT幅度: |complex| = sqrt(real^2 + imag^2)
+        S_P1_fft = np.sqrt(S_P1_fft_real**2 + S_P1_fft_imag**2)
+    elif data_batch.shape[2] >= 6:
+        S_P1_fft_real = data_batch[:, :, 5:6]  # FFT实部 [batch, seq_len, 1]
+        S_P1_fft_imag = np.zeros_like(S_P1_fft_real)  # 如果没有虚部，设为0
+        
+        # 计算FFT幅度
+        S_P1_fft = np.sqrt(S_P1_fft_real**2 + S_P1_fft_imag**2)
+    else:
+        # 兼容旧格式
+        S_P1_fft = np.zeros((batch_size, data_batch.shape[1], 1))
     
     # 检查是否有振动数据（判断pairs）
     s_zero = np.array([0, 0, 0])
@@ -186,7 +210,7 @@ def prepare_acl_inputs(data_batch):
     
     pairs = np.array(pairs, dtype=np.float32)
     
-    return pairs, S_V.astype(np.float32), S_P.astype(np.float32), S_P1.astype(np.float32)
+    return pairs, S_V.astype(np.float32), S_P.astype(np.float32), S_P1.astype(np.float32), S_P1_fft.astype(np.float32)
 
 
 def run_acl_inference(model, data, batch_size, label_names):
@@ -209,11 +233,11 @@ def run_acl_inference(model, data, batch_size, label_names):
         batch_data = data[start_idx:end_idx]
         
         # 准备ACL输入
-        pairs, S_V, S_P, S_P1 = prepare_acl_inputs(batch_data)
+        pairs, S_V, S_P, S_P1, S_P1_fft = prepare_acl_inputs(batch_data)
         
         # 运行推理
         start_time = time.time()
-        outputs = model.forward(pairs, S_V, S_P, S_P1)
+        outputs = model.forward(pairs, S_V, S_P, S_P1, S_P1_fft)
         end_time = time.time()
         
         # 处理输出
