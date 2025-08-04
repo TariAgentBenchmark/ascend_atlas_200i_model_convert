@@ -64,9 +64,9 @@ class ACLModelInference:
         
         return dataset, datas
     
-    def forward(self, pairs, S_V, S_P, S_P1):
+    def forward(self, pairs, S_V, S_P, S_P1, S_P1_fft):
         """执行推理"""
-        inputs = [pairs, S_V, S_P, S_P1]
+        inputs = [pairs, S_V, S_P, S_P1, S_P1_fft]
         
         # 将输入数据拷贝到设备内存
         for i in range(len(inputs)):
