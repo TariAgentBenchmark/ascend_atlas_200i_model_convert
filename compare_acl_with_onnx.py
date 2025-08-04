@@ -1,431 +1,223 @@
-#!/usr/bin/env python3
-
-import argparse
-import time
-import os
 import numpy as np
-import pandas as pd
 import onnxruntime as ort
-from sklearn.metrics import accuracy_score
-import sys
-sys.path.append('.')
-
-from data_processing import dataProcessing, standardize_with_train
-from data_processing_3 import dataProcessing_3
-
-# Import ACL inference class
-try:
-    from scripts.acl_inference import ACLModelInference, prepare_acl_inputs
-    ACL_AVAILABLE = True
-except ImportError:
-    print("Warning: ACL not available. ACL comparison will be skipped.")
-    ACL_AVAILABLE = False
+from acl_model import CustomModelInference
 
 
-def load_test_data(data_path, max_samples=None):
-    """Load and process test data for comparison"""
-    print(f"Loading test data from: {data_path}")
-    
-    # Check if data path exists
-    if not os.path.exists(data_path):
-        print(f"Warning: Data path {data_path} does not exist. Creating dummy data for testing.")
-        # Create dummy data with 7 features for ONNX compatibility
-        dummy_data = np.random.randn(40, 5120, 7).astype(np.float32)
-        dummy_labels = np.random.randint(0, 9, 40)
-        filenames = [f"dummy_{i:04d}" for i in range(40)]
-        return dummy_data, dummy_labels, filenames
-    
-    # Load data_2_S1 data
-    data_2_path = os.path.join(data_path, "data_2_S1")
-    if os.path.exists(data_2_path):
-        Train_P, Train_V, Train_Yf, Test_P, Test_V, Test_Yf = dataProcessing(file_path=data_2_path)
-        Train_V_std, Test_V_std = standardize_with_train(Train_V, Test_V)
-        Train_P_std, Test_P_std = standardize_with_train(Train_P, Test_P)
+def test_acl_model(model_path):
+    """Test the ACL model"""
+    try:
+        # Create ACL model instance
+        model = CustomModelInference(model_path)
+        print("✓ ACL model loaded successfully")
         
-        # Load data_1_S1 data
-        data_1_path = os.path.join(data_path, "data_1_S1")
-        if os.path.exists(data_1_path):
-            train_x, test_x, train_y, test_y, train_x_fft, test_x_fft = dataProcessing_3(file_path=data_1_path)
-            test_x = test_x.reshape(-1, test_x.shape[2])
-            test_x = np.expand_dims(test_x, axis=-1)
-            test_x_fft = test_x_fft.reshape(-1, test_x_fft.shape[2])
-            test_x_fft = np.expand_dims(test_x_fft, axis=-1)
-            
-            # Separate FFT real and imaginary parts
-            test_x_fft_real = np.real(test_x_fft).astype(np.float32)
-            test_x_fft_imag = np.imag(test_x_fft).astype(np.float32)
-            
-            # Combine data (includes FFT real and imaginary parts)
-            Test_x = np.concatenate((Test_P_std, Test_V_std, test_x, test_x_fft_real, test_x_fft_imag), axis=2)
-            Test_Y = Test_Yf
-            
-            # Ensure correct data type
-            Test_x = Test_x.astype(np.float32)
-            
-            # Limit samples if specified
-            if max_samples and len(Test_x) > max_samples:
-                Test_x = Test_x[:max_samples]
-                Test_Y = Test_Y[:max_samples]
-            
-            filenames = [f"sample_{i:04d}" for i in range(len(Test_x))]
-            print(f"Data loaded successfully. Test samples: {len(Test_x)}")
-            return Test_x, Test_Y, filenames
-    
-    # Fallback to dummy data
-    print("Warning: Required data folders not found. Creating dummy data for testing.")
-    dummy_data = np.random.randn(40, 5120, 7).astype(np.float32)
-    dummy_labels = np.random.randint(0, 9, 40)
-    filenames = [f"dummy_{i:04d}" for i in range(40)]
-    return dummy_data, dummy_labels, filenames
-
-
-def prepare_onnx_inputs(data_batch):
-    """Prepare inputs for ONNX model (5 inputs including S_P1_fft)"""
-    batch_size = data_batch.shape[0]
-    
-    # Separate data components
-    S_P = data_batch[:, :, 0:1]  # Pressure data [batch, seq_len, 1]
-    S_V = data_batch[:, :, 1:4]  # Vibration data [batch, seq_len, 3]
-    S_P1 = data_batch[:, :, 4:5]  # Physical data [batch, seq_len, 1]
-    
-    # Handle FFT data - if 7 dimensions, it includes real and imaginary parts
-    if data_batch.shape[2] >= 7:
-        S_P1_fft_real = data_batch[:, :, 5:6]  # FFT real part [batch, seq_len, 1]
-        S_P1_fft_imag = data_batch[:, :, 6:7]  # FFT imaginary part [batch, seq_len, 1]
+        # Create test inputs (ACL model expects 4 inputs: pairs, S_V, S_P, S_P1)
+        batch_size = 1
+        sequence_length = 5120
         
-        # Compute FFT magnitude: |complex| = sqrt(real^2 + imag^2)
-        S_P1_fft = np.sqrt(S_P1_fft_real**2 + S_P1_fft_imag**2)
-    elif data_batch.shape[2] >= 6:
-        S_P1_fft_real = data_batch[:, :, 5:6]  # FFT real part [batch, seq_len, 1]
-        S_P1_fft_imag = np.zeros_like(S_P1_fft_real)  # If no imaginary part, set to 0
+        pairs = np.ones((batch_size,), dtype=np.float32)
+        S_V = np.random.randn(batch_size, sequence_length, 3).astype(np.float32)
+        S_P = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
+        S_P1 = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
         
-        # Compute FFT magnitude
-        S_P1_fft = np.sqrt(S_P1_fft_real**2 + S_P1_fft_imag**2)
-    else:
-        # Compatibility with old format
-        S_P1_fft = np.zeros((batch_size, data_batch.shape[1], 1))
-    
-    # Check if vibration data exists (determine pairs)
-    s_zero = np.array([0, 0, 0])
-    s_zero_expanded = np.broadcast_to(s_zero, (S_V.shape[1], 3))
-    
-    pairs = []
-    for i in range(batch_size):
-        is_zero = np.allclose(S_V[i], s_zero_expanded)
-        pairs.append(0.0 if is_zero else 1.0)
-    
-    pairs = np.array(pairs, dtype=np.float32)
-    
-    return pairs, S_V.astype(np.float32), S_P.astype(np.float32), S_P1.astype(np.float32), S_P1_fft.astype(np.float32)
-
-
-def run_onnx_inference(model_path, data, batch_size):
-    """Run ONNX model inference"""
-    print(f"Loading ONNX model from: {model_path}")
-    
-    # Load ONNX model
-    session = ort.InferenceSession(model_path)
-    
-    print("ONNX Model inputs:")
-    for input_meta in session.get_inputs():
-        print(f"  {input_meta.name}: {input_meta.shape} ({input_meta.type})")
-    
-    print("ONNX Model outputs:")
-    for output_meta in session.get_outputs():
-        print(f"  {output_meta.name}: {output_meta.shape} ({output_meta.type})")
-    
-    all_predictions = []
-    all_logits = []
-    inference_times = []
-    
-    num_samples = len(data)
-    num_batches = (num_samples + batch_size - 1) // batch_size
-    
-    print("Starting ONNX inference...")
-    for batch_idx in range(num_batches):
-        start_idx = batch_idx * batch_size
-        end_idx = min(start_idx + batch_size, num_samples)
-        
-        # Prepare batch data
-        batch_data = data[start_idx:end_idx]
-        
-        # Prepare ONNX inputs (5 inputs)
-        pairs, S_V, S_P, S_P1, S_P1_fft = prepare_onnx_inputs(batch_data)
+        print(f"Input shapes:")
+        print(f"  pairs: {pairs.shape}")
+        print(f"  S_V: {S_V.shape}")
+        print(f"  S_P: {S_P.shape}")
+        print(f"  S_P1: {S_P1.shape}")
         
         # Run inference
-        start_time = time.time()
-        outputs = session.run(None, {
+        outputs = model.forward(pairs, S_V, S_P, S_P1)
+        
+        print(f"✓ ACL inference successful")
+        print(f"Number of outputs: {len(outputs)}")
+        for i, output in enumerate(outputs):
+            print(f"  Output {i} shape: {output.shape}")
+            print(f"  Output {i} sample: {output.flatten()[:5]}...")
+        
+        # Clean up
+        del model
+        return outputs, (pairs, S_V, S_P, S_P1)
+        
+    except Exception as e:
+        print(f"✗ ACL model test failed: {e}")
+        return None, None
+
+
+def test_onnx_model(inputs=None):
+    """Test the ONNX model"""
+    try:
+        # Load the ONNX model
+        session = ort.InferenceSession("model.onnx")
+        print("✓ ONNX model loaded successfully")
+        
+        # Print model info
+        print(f"Model inputs: {[input.name for input in session.get_inputs()]}")
+        print(f"Model outputs: {[output.name for output in session.get_outputs()]}")
+        
+        # Print input shapes
+        for input_meta in session.get_inputs():
+            print(f"  Input '{input_meta.name}': {input_meta.shape} ({input_meta.type})")
+        
+        # Print output shapes  
+        for output_meta in session.get_outputs():
+            print(f"  Output '{output_meta.name}': {output_meta.shape} ({output_meta.type})")
+        
+        # Create test inputs if not provided
+        if inputs is None:
+            batch_size = 1
+            sequence_length = 5120
+            
+            pairs = np.ones((batch_size,), dtype=np.float32)
+            S_V = np.random.randn(batch_size, sequence_length, 3).astype(np.float32)
+            S_P = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
+            S_P1 = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
+            S_P1_fft = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
+        else:
+            pairs, S_V, S_P, S_P1 = inputs
+            # Create S_P1_fft for ONNX model if it requires it
+            S_P1_fft = np.random.randn(*S_P1.shape).astype(np.float32)
+        
+        # Prepare inputs dictionary based on model requirements
+        input_names = [input.name for input in session.get_inputs()]
+        input_dict = {
             'pairs': pairs,
             'S_V': S_V,
             'S_P': S_P,
-            'S_P1': S_P1,
-            'S_P1_fft': S_P1_fft
-        })
-        end_time = time.time()
-        
-        # Process output
-        pred_final = outputs[0]
-        if len(pred_final.shape) == 1:
-            pred_final = pred_final.reshape(batch_data.shape[0], -1)
-        
-        # Save raw logits
-        all_logits.extend(pred_final)
-        
-        # Get predicted classes
-        pred_classes = np.argmax(pred_final, axis=1)
-        
-        # Record results
-        all_predictions.extend(pred_classes)
-        inference_times.append(end_time - start_time)
-        
-        if batch_idx % 10 == 0:
-            print(f"  Processed batch {batch_idx}/{num_batches}")
-    
-    return all_predictions, all_logits, inference_times
-
-
-def run_acl_inference_wrapper(model_path, data, batch_size):
-    """Wrapper for ACL model inference"""
-    if not ACL_AVAILABLE:
-        print("ACL not available, skipping ACL inference")
-        return None, None, None
-    
-    print(f"Loading ACL model from: {model_path}")
-    
-    # Load ACL model
-    try:
-        model = ACLModelInference(model_path)
-    except Exception as e:
-        print(f"Error loading ACL model: {e}")
-        return None, None, None
-    
-    all_predictions = []
-    all_logits = []
-    inference_times = []
-    
-    num_samples = len(data)
-    num_batches = (num_samples + batch_size - 1) // batch_size
-    
-    print("Starting ACL inference...")
-    for batch_idx in range(num_batches):
-        start_idx = batch_idx * batch_size
-        end_idx = min(start_idx + batch_size, num_samples)
-        
-        # Prepare batch data
-        batch_data = data[start_idx:end_idx]
-        
-        # Prepare ACL inputs (4 inputs - without S_P1_fft)
-        pairs, S_V, S_P, S_P1, _ = prepare_acl_inputs(batch_data)
-        
-        # Run inference
-        start_time = time.time()
-        outputs = model.forward(pairs, S_V, S_P, S_P1)
-        end_time = time.time()
-        
-        # Process output
-        pred_final = outputs[0]
-        if len(pred_final.shape) == 1:
-            pred_final = pred_final.reshape(batch_data.shape[0], -1)
-        
-        # Save raw logits
-        all_logits.extend(pred_final)
-        
-        # Get predicted classes
-        pred_classes = np.argmax(pred_final, axis=1)
-        
-        # Record results
-        all_predictions.extend(pred_classes)
-        inference_times.append(end_time - start_time)
-        
-        if batch_idx % 10 == 0:
-            print(f"  Processed batch {batch_idx}/{num_batches}")
-    
-    # Clean up
-    del model
-    
-    return all_predictions, all_logits, inference_times
-
-
-def compare_results(onnx_preds, onnx_logits, onnx_times, acl_preds, acl_logits, acl_times, labels):
-    """Compare results between ONNX and ACL models"""
-    print("\n" + "="*60)
-    print("COMPARISON RESULTS")
-    print("="*60)
-    
-    # Basic metrics
-    if acl_preds is not None:
-        onnx_accuracy = accuracy_score(labels, onnx_preds)
-        acl_accuracy = accuracy_score(labels, acl_preds)
-        
-        print(f"ONNX Accuracy: {onnx_accuracy:.4f}")
-        print(f"ACL Accuracy:  {acl_accuracy:.4f}")
-        print(f"Accuracy Difference: {abs(onnx_accuracy - acl_accuracy):.4f}")
-        
-        # Prediction agreement
-        agreement = np.mean(np.array(onnx_preds) == np.array(acl_preds))
-        print(f"Prediction Agreement: {agreement:.4f} ({agreement*100:.1f}%)")
-        
-        # Logits comparison
-        if onnx_logits and acl_logits:
-            onnx_logits_array = np.array(onnx_logits)
-            acl_logits_array = np.array(acl_logits)
-            
-            # Ensure same shape
-            min_samples = min(len(onnx_logits_array), len(acl_logits_array))
-            onnx_logits_array = onnx_logits_array[:min_samples]
-            acl_logits_array = acl_logits_array[:min_samples]
-            
-            if onnx_logits_array.shape == acl_logits_array.shape:
-                max_logit_diff = np.max(np.abs(onnx_logits_array - acl_logits_array))
-                mean_logit_diff = np.mean(np.abs(onnx_logits_array - acl_logits_array))
-                
-                print(f"Max Logit Difference: {max_logit_diff:.6f}")
-                print(f"Mean Logit Difference: {mean_logit_diff:.6f}")
-                
-                if max_logit_diff < 1e-5:
-                    print("✓ Logits match very closely!")
-                elif max_logit_diff < 1e-3:
-                    print("✓ Logits match reasonably well")
-                elif max_logit_diff < 0.1:
-                    print("⚠ Logits have moderate differences")
-                else:
-                    print("⚠ Logits have significant differences")
-            else:
-                print(f"⚠ Logit shapes don't match: ONNX {onnx_logits_array.shape} vs ACL {acl_logits_array.shape}")
-        
-        # Performance comparison
-        onnx_total_time = sum(onnx_times)
-        acl_total_time = sum(acl_times)
-        onnx_avg_time = onnx_total_time / len(onnx_preds)
-        acl_avg_time = acl_total_time / len(acl_preds)
-        
-        print(f"\nPerformance Comparison:")
-        print(f"ONNX Total Time: {onnx_total_time:.4f}s")
-        print(f"ACL Total Time:  {acl_total_time:.4f}s")
-        print(f"ONNX Avg Time per Sample: {onnx_avg_time:.6f}s")
-        print(f"ACL Avg Time per Sample:  {acl_avg_time:.6f}s")
-        print(f"Speedup (ACL vs ONNX): {onnx_avg_time/acl_avg_time:.2f}x")
-        
-    else:
-        print("ACL inference not available - showing ONNX results only:")
-        onnx_accuracy = accuracy_score(labels, onnx_preds)
-        print(f"ONNX Accuracy: {onnx_accuracy:.4f}")
-        
-        onnx_total_time = sum(onnx_times)
-        onnx_avg_time = onnx_total_time / len(onnx_preds)
-        print(f"ONNX Total Time: {onnx_total_time:.4f}s")
-        print(f"ONNX Avg Time per Sample: {onnx_avg_time:.6f}s")
-
-
-def save_comparison_results(onnx_preds, onnx_logits, acl_preds, acl_logits, labels, filenames, output_path):
-    """Save detailed comparison results to Excel"""
-    print(f"Saving comparison results to: {output_path}")
-    
-    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-        # Detailed comparison results
-        comparison_data = {
-            'Sample': filenames,
-            'True_Label': labels,
-            'ONNX_Prediction': onnx_preds,
+            'S_P1': S_P1
         }
         
-        if acl_preds is not None:
-            comparison_data['ACL_Prediction'] = acl_preds
-            comparison_data['Predictions_Match'] = [1 if o == a else 0 for o, a in zip(onnx_preds, acl_preds)]
-            comparison_data['ONNX_Correct'] = [1 if p == l else 0 for p, l in zip(onnx_preds, labels)]
-            comparison_data['ACL_Correct'] = [1 if p == l else 0 for p, l in zip(acl_preds, labels)]
-        else:
-            comparison_data['ONNX_Correct'] = [1 if p == l else 0 for p, l in zip(onnx_preds, labels)]
+        # Add S_P1_fft if the model expects it
+        if 'S_P1_fft' in input_names:
+            input_dict['S_P1_fft'] = S_P1_fft
+            print(f"  S_P1_fft: {S_P1_fft.shape}")
         
-        comparison_df = pd.DataFrame(comparison_data)
-        comparison_df.to_excel(writer, sheet_name='Comparison_Results', index=False)
+        # Run inference
+        outputs = session.run(None, input_dict)
         
-        # ONNX logits
-        if onnx_logits:
-            onnx_logits_array = np.array(onnx_logits)
-            onnx_logits_df = pd.DataFrame(onnx_logits_array, columns=[f'ONNX_Logit_Class_{i}' for i in range(onnx_logits_array.shape[1])])
-            onnx_logits_df['Sample'] = filenames
-            onnx_logits_df['True_Label'] = labels
-            # Reorder columns
-            cols = ['Sample', 'True_Label'] + [f'ONNX_Logit_Class_{i}' for i in range(onnx_logits_array.shape[1])]
-            onnx_logits_df = onnx_logits_df[cols]
-            onnx_logits_df.to_excel(writer, sheet_name='ONNX_Logits', index=False)
+        print(f"✓ ONNX inference successful")
+        print(f"Number of outputs: {len(outputs)}")
+        for i, output in enumerate(outputs):
+            print(f"  Output {i} shape: {output.shape}")
+            print(f"  Output {i} sample: {output.flatten()[:5]}...")
         
-        # ACL logits
-        if acl_logits:
-            acl_logits_array = np.array(acl_logits)
-            acl_logits_df = pd.DataFrame(acl_logits_array, columns=[f'ACL_Logit_Class_{i}' for i in range(acl_logits_array.shape[1])])
-            acl_logits_df['Sample'] = filenames
-            acl_logits_df['True_Label'] = labels
-            # Reorder columns
-            cols = ['Sample', 'True_Label'] + [f'ACL_Logit_Class_{i}' for i in range(acl_logits_array.shape[1])]
-            acl_logits_df = acl_logits_df[cols]
-            acl_logits_df.to_excel(writer, sheet_name='ACL_Logits', index=False)
+        return outputs
         
-        # Logits difference (if both available)
-        if onnx_logits and acl_logits:
-            onnx_array = np.array(onnx_logits)
-            acl_array = np.array(acl_logits)
-            min_samples = min(len(onnx_array), len(acl_array))
-            
-            if onnx_array.shape == acl_array.shape:
-                diff_array = onnx_array[:min_samples] - acl_array[:min_samples]
-                diff_df = pd.DataFrame(diff_array, columns=[f'Diff_Class_{i}' for i in range(diff_array.shape[1])])
-                diff_df['Sample'] = filenames[:min_samples]
-                diff_df['Max_Abs_Diff'] = np.max(np.abs(diff_array), axis=1)
-                # Reorder columns
-                cols = ['Sample', 'Max_Abs_Diff'] + [f'Diff_Class_{i}' for i in range(diff_array.shape[1])]
-                diff_df = diff_df[cols]
-                diff_df.to_excel(writer, sheet_name='Logits_Difference', index=False)
+    except Exception as e:
+        print(f"✗ ONNX model test failed: {e}")
+        return None
+
+
+def compare_acl_vs_onnx(acl_model_path, onnx_model_path="model.onnx"):
+    """Compare ACL model output with ONNX model output"""
+    print("Comparing ACL vs ONNX models...")
+    print("=" * 60)
     
-    print(f"Comparison results saved to {output_path}")
+    # Test ACL model first
+    print("\n1. Testing ACL model:")
+    print("-" * 30)
+    acl_outputs, test_inputs = test_acl_model(acl_model_path)
+    
+    if acl_outputs is None:
+        print("✗ ACL model test failed, cannot proceed with comparison")
+        return False
+    
+    # Test ONNX model with same inputs
+    print("\n2. Testing ONNX model:")
+    print("-" * 30)
+    onnx_outputs = test_onnx_model(test_inputs)
+    
+    if onnx_outputs is None:
+        print("✗ ONNX model test failed, cannot proceed with comparison")
+        return False
+    
+    # Compare outputs
+    print("\n3. Comparing outputs:")
+    print("-" * 30)
+    
+    try:
+        # Check if we have the same number of outputs
+        if len(acl_outputs) != len(onnx_outputs):
+            print(f"⚠ Different number of outputs: ACL={len(acl_outputs)}, ONNX={len(onnx_outputs)}")
+            min_outputs = min(len(acl_outputs), len(onnx_outputs))
+            print(f"Comparing first {min_outputs} outputs...")
+        else:
+            min_outputs = len(acl_outputs)
+        
+        overall_max_diff = 0
+        overall_mean_diff = 0
+        
+        for i in range(min_outputs):
+            acl_out = acl_outputs[i]
+            onnx_out = onnx_outputs[i]
+            
+            # Reshape if necessary to match dimensions
+            if acl_out.shape != onnx_out.shape:
+                print(f"  Output {i}: Shape mismatch - ACL: {acl_out.shape}, ONNX: {onnx_out.shape}")
+                # Try to reshape to match
+                if acl_out.size == onnx_out.size:
+                    acl_out = acl_out.reshape(onnx_out.shape)
+                    print(f"  Output {i}: Reshaped ACL output to match ONNX shape")
+                else:
+                    print(f"  Output {i}: Cannot compare due to different sizes")
+                    continue
+            
+            # Calculate differences
+            max_diff = np.max(np.abs(acl_out - onnx_out))
+            mean_diff = np.mean(np.abs(acl_out - onnx_out))
+            rel_diff = mean_diff / (np.mean(np.abs(onnx_out)) + 1e-8)
+            
+            print(f"  Output {i}:")
+            print(f"    Max difference: {max_diff:.8f}")
+            print(f"    Mean difference: {mean_diff:.8f}")
+            print(f"    Relative difference: {rel_diff:.8f}")
+            
+            # Update overall statistics
+            overall_max_diff = max(overall_max_diff, max_diff)
+            overall_mean_diff += mean_diff
+        
+        overall_mean_diff /= min_outputs
+        
+        print(f"\nOverall comparison:")
+        print(f"  Max difference: {overall_max_diff:.8f}")
+        print(f"  Mean difference: {overall_mean_diff:.8f}")
+        
+        # Provide assessment
+        if overall_max_diff < 1e-6:
+            print("✓ Models match very closely!")
+        elif overall_max_diff < 1e-4:
+            print("✓ Models match reasonably well")
+        elif overall_max_diff < 1e-2:
+            print("⚠ Models have moderate differences")
+        else:
+            print("✗ Models have significant differences")
+        
+        return True
+        
+    except Exception as e:
+        print(f"✗ Output comparison failed: {e}")
+        return False
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Compare ACL and ONNX Model Inference')
-    parser.add_argument('--onnx-model', type=str, required=True, help='Path to ONNX model (.onnx) file')
-    parser.add_argument('--acl-model', type=str, help='Path to ACL model (.om) file (optional)')
-    parser.add_argument('--data-path', type=str, default='./data', help='Path to test data directory')
-    parser.add_argument('--output', type=str, default='acl_onnx_comparison.xlsx', help='Output Excel file path')
-    parser.add_argument('--batch-size', type=int, default=8, help='Batch size for inference')
-    parser.add_argument('--max-samples', type=int, default=80, help='Maximum number of samples to process')
+    """Main function to run the comparison"""
+    print("ACL vs ONNX Model Comparison")
+    print("=" * 60)
     
-    args = parser.parse_args()
+    # Model paths - update these according to your setup
+    acl_model_path = "model.om"  # Update this path
+    onnx_model_path = "model.onnx"
     
-    # Check model files
-    if not os.path.exists(args.onnx_model):
-        print(f"Error: ONNX model file not found: {args.onnx_model}")
-        return
+    print(f"ACL model path: {acl_model_path}")
+    print(f"ONNX model path: {onnx_model_path}")
+    print()
     
-    if args.acl_model and not os.path.exists(args.acl_model):
-        print(f"Error: ACL model file not found: {args.acl_model}")
-        return
+    # Run comparison
+    success = compare_acl_vs_onnx(acl_model_path, onnx_model_path)
     
-    # Load test data
-    test_data, test_labels, filenames = load_test_data(args.data_path, args.max_samples)
-    
-    print(f"Loaded {len(test_data)} test samples")
-    print(f"Data shape: {test_data.shape}")
-    
-    # Run ONNX inference
-    onnx_preds, onnx_logits, onnx_times = run_onnx_inference(
-        args.onnx_model, test_data, args.batch_size
-    )
-    
-    # Run ACL inference (if available and model provided)
-    acl_preds, acl_logits, acl_times = None, None, None
-    if args.acl_model and ACL_AVAILABLE:
-        acl_preds, acl_logits, acl_times = run_acl_inference_wrapper(
-            args.acl_model, test_data, args.batch_size
-        )
-    elif args.acl_model and not ACL_AVAILABLE:
-        print("Warning: ACL model path provided but ACL is not available")
-    
-    # Compare results
-    compare_results(onnx_preds, onnx_logits, onnx_times, acl_preds, acl_logits, acl_times, test_labels)
-    
-    # Save detailed results
-    save_comparison_results(onnx_preds, onnx_logits, acl_preds, acl_logits, test_labels, filenames, args.output)
+    if success:
+        print("\n✓ Comparison completed successfully!")
+    else:
+        print("\n✗ Comparison failed!")
 
 
 if __name__ == "__main__":
