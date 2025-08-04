@@ -55,10 +55,10 @@ class CustomModelInference:
             datas.append({"buffer": buffer, "data": data_buffer, "size": buffer_size})
         return dataset, datas
 
-    def forward(self, pairs, S_V, S_P, S_P1):
+    def forward(self, pairs, S_V, S_P, S_P1, S_P1_fft):
         # 执行推理任务
         # 输入数据列表（按照模型输入顺序）
-        inputs = [pairs, S_V, S_P, S_P1]
+        inputs = [pairs, S_V, S_P, S_P1, S_P1_fft]
         
         # 遍历所有输入，拷贝到对应的buffer内存中
         input_num = len(inputs)
@@ -123,8 +123,9 @@ def create_test_inputs(batch_size=1, sequence_length=5120):
     S_V = np.random.randn(batch_size, sequence_length, 3).astype(np.float32)
     S_P = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
     S_P1 = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
-    
-    return pairs, S_V, S_P, S_P1
+    S_P1_fft = np.random.randn(batch_size, sequence_length, 1).astype(np.float32)
+
+    return pairs, S_V, S_P, S_P1, S_P1_fft
 
 
 def print_results(result):
@@ -145,17 +146,18 @@ if __name__ == "__main__":
     model = CustomModelInference(model_path)
     
     # 创建测试输入数据
-    pairs, S_V, S_P, S_P1 = create_test_inputs()
+    pairs, S_V, S_P, S_P1, S_P1_fft = create_test_inputs()
     
     print("Input shapes:")
     print(f"pairs: {pairs.shape}")
     print(f"S_V: {S_V.shape}")
     print(f"S_P: {S_P.shape}")
     print(f"S_P1: {S_P1.shape}")
+    print(f"S_P1_fft: {S_P1_fft.shape}")
     print()
     
     # 执行推理
-    result = model.forward(pairs, S_V, S_P, S_P1)
+    result = model.forward(pairs, S_V, S_P, S_P1, S_P1_fft)
     
     # 打印结果
     print_results(result)
