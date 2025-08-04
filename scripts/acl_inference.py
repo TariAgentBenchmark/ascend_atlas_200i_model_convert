@@ -235,9 +235,9 @@ def run_acl_inference(model, data, batch_size, label_names):
         # 准备ACL输入
         pairs, S_V, S_P, S_P1, S_P1_fft = prepare_acl_inputs(batch_data)
         
-        # 运行推理 - 当前ACL模型只支持4个参数（从旧ONNX模型转换）
+        # 运行推理
         start_time = time.time()
-        outputs = model.forward(pairs, S_V, S_P, S_P1)
+        outputs = model.forward(pairs, S_V, S_P, S_P1, S_P1_fft)
         end_time = time.time()
         
         # 处理输出
