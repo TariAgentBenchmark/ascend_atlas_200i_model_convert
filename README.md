@@ -1,8 +1,28 @@
-# Logits Comparison Tools
+# 昇腾推理
 
-本文档介绍如何使用修改后的推理脚本来输出和对比三种模型格式的logits精度。
+## 快速开始
+安装uv
+```
+pip install uv
+```
+安装依赖包
+```
+uv sync
+```
+pytorch转onnx
+```
+python convert_to_onnx.py
+```
+onnx转om模型
+```
+atc --model=./model.onnx --framework=5 --output=./atc_out/model --soc_version=Ascend310B4 --input_shape="pairs:1;S_V:1,5120,3;S_P:1,5120,1;S_P1:1,5120,1;S_P1_fft:1,5120,1" --precision_mode force_fp32
+```
 
-## 功能特性
+推理示例脚本`acl_model.py`
+
+## 精度对比
+
+本章节介绍如何使用修改后的推理脚本来输出和对比三种模型格式的logits精度。
 
 ### 1. 增强的推理脚本
 - **pytorch_inference.py**: PyTorch模型推理，现在输出原始logits
@@ -13,7 +33,7 @@
 - **compare_logits.py**: 对比不同模型格式的logits精度
 - **run_all_inference_and_compare.py**: 一键运行所有推理并自动对比
 
-## 输出内容
+### 输出内容
 
 每个推理脚本现在会输出：
 1. **分类结果**: 预测类别和准确率
@@ -28,61 +48,26 @@ Excel文件包含以下表格：
 - `置信度统计`: 每个类别的置信度统计
 - `原始Logits`: 专门的logits数据表
 
-## 使用方法
-
-### 方式1: 单独运行推理脚本
-
+### 使用方法
+PyTorch推理
 ```bash
-# PyTorch推理
-python scripts/pytorch_inference.py \
-    --model-path lightning_logs/version_0/checkpoints/epoch=150-step=150.ckpt \
-    --data-path ./data \
-    --output output/pytorch_results.xlsx \
-    --batch-size 8 \
-    --max-batches 100
-
-# ONNX推理
-python scripts/onnx_inference.py \
-    --model-path model.onnx \
-    --data-path ./data \
-    --output output/onnx_results.xlsx \
-    --batch-size 8 \
-    --max-batches 100
-
-# ACL推理
-python scripts/acl_inference.py \
-    --model-path path/to/model.om \
-    --data-path ./data \
-    --output acl_results.xlsx \
-    --batch-size 8 \
-    --max-batches 10
+python scripts/pytorch_inference.py --model-path lightning_logs/version_0/checkpoints/epoch=150-step=150.ckpt --data-path ./data --output output/pytorch_results.xlsx --batch-size 8 --max-batches 100
 ```
 
-### 方式2: 对比logits
-
+ONNX推理
+```
+python scripts/onnx_inference.py --model-path model.onnx --data-path ./data --output output/onnx_results.xlsx --batch-size 8    --max-batches 100
+```
+ACL推理
+```
+python scripts/acl_inference.py --model-path path/to/model.om --data-path ./data --output acl_results.xlsx --batch-size 8 --max-batches 10
+```
+对比logits
 ```bash
 # 对比两个或三个模型的logits
-python scripts/compare_logits.py \
-    --pytorch-results pytorch_results.xlsx \
-    --onnx-results onnx_results.xlsx \
-    --acl-results acl_results.xlsx \
-    --output logits_comparison.xlsx \
-    --plots-dir comparison_plots
+python scripts/compare_logits.py --pytorch-results pytorch_results.xlsx --onnx-results onnx_results.xlsx --acl-results acl_results.xlsx --output output/logits_comparison.xlsx  --plots-dir comparison_plots
 ```
 
-### 方式3: 一键运行所有推理和对比
-
-```bash
-# 运行所有可用模型的推理并自动对比
-python scripts/run_all_inference_and_compare.py \
-    --pytorch-model path/to/model.ckpt \
-    --onnx-model path/to/model.onnx \
-    --acl-model path/to/model.om \
-    --data-path ./data \
-    --output-dir inference_results \
-    --batch-size 8 \
-    --max-batches 10
-```
 
 ## Logits对比指标
 
