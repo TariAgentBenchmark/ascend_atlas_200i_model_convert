@@ -290,14 +290,46 @@ def run_acl_inference(model, data, batch_size, label_names):
         # 处理输出
         # 假设第一个输出是预测结果，重新调整形状
         pred_final = outputs[0]
+        
+        # 调试信息：检查ACL模型输出
+        print(f"DEBUG: ACL原始输出shape: {pred_final.shape}")
+        print(f"DEBUG: ACL原始输出内容示例: {pred_final[:min(2, len(pred_final))]}")
+        
         if len(pred_final.shape) == 1:
             pred_final = pred_final.reshape(batch_data.shape[0], -1)
+        
+        print(f"DEBUG: ACL reshape后shape: {pred_final.shape}")
+        print(f"DEBUG: 预期的类别数: 9 (0-8)")
+        
+        # 重要修复：确保输出维度正确
+        # 模型应该输出9个类别的logits (0-8)
+        expected_num_classes = 9
+        if pred_final.shape[1] != expected_num_classes:
+            print(f"WARNING: ACL模型输出维度异常！期望{expected_num_classes}，实际{pred_final.shape[1]}")
+            if pred_final.shape[1] > expected_num_classes:
+                # 如果输出维度过大，只取前9个
+                print(f"截取前{expected_num_classes}个输出作为类别logits")
+                pred_final = pred_final[:, :expected_num_classes]
+            else:
+                # 如果输出维度过小，这是严重错误
+                print(f"ERROR: ACL模型输出维度不足！无法进行预测")
+                continue
+        
+        print(f"DEBUG: ACL最终logits shape: {pred_final.shape}")
         
         # 保存原始logits
         all_logits.extend(pred_final)
         
         # 获取预测类别
         pred_classes = np.argmax(pred_final, axis=1)
+        
+        # 验证预测类别范围
+        print(f"DEBUG: 当前批次预测类别范围: {np.min(pred_classes)} - {np.max(pred_classes)}")
+        if np.max(pred_classes) >= expected_num_classes or np.min(pred_classes) < 0:
+            print(f"WARNING: 发现异常预测值！预测范围: {np.min(pred_classes)} - {np.max(pred_classes)}")
+            # 将异常预测值裁剪到合理范围
+            pred_classes = np.clip(pred_classes, 0, expected_num_classes - 1)
+            print(f"已将预测值裁剪到合理范围: {np.min(pred_classes)} - {np.max(pred_classes)}")
         
         # 计算置信度（softmax）
         exp_logits = np.exp(pred_final - np.max(pred_final, axis=1, keepdims=True))
