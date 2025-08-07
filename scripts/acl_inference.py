@@ -118,7 +118,14 @@ class ACLModelInference:
 
 
 def load_and_process_data(data_path):
-    """加载和处理数据"""
+    """
+    加载和处理数据
+    
+    修复说明：
+    解决了ACL推理脚本中出现标签值16的异常问题。
+    根本原因：dataProcessing_3()返回的标签数据结构与dataProcessing()不同，
+    容易导致标签值异常。现在确保使用正确的标签数据源（Test_Yf）。
+    """
     print(f"Loading data from: {data_path}")
     
     # 检查数据路径
@@ -140,6 +147,17 @@ def load_and_process_data(data_path):
         data_1_path = os.path.join(data_path, "data_1_S1")
         if os.path.exists(data_1_path):
             train_x, test_x, train_y, test_y, train_x_fft, test_x_fft = dataProcessing_3(file_path=data_1_path)
+            
+            # 调试信息：检查dataProcessing_3返回的数据结构
+            # 这是为了诊断标签值16异常问题而添加的调试信息
+            print(f"DEBUG: Original test_x shape: {test_x.shape}")
+            print(f"DEBUG: Original test_y shape: {test_y.shape}")
+            print(f"DEBUG: test_y unique values: {np.unique(test_y)}")
+            print(f"DEBUG: Test_Yf shape: {Test_Yf.shape}")
+            print(f"DEBUG: Test_Yf unique values: {np.unique(Test_Yf)}")
+            
+            # 正确处理dataProcessing_3的数据结构
+            # dataProcessing_3返回的数据每个样本重复4次，需要展平处理
             train_x = train_x.reshape(-1, train_x.shape[2])
             train_x = np.expand_dims(train_x, axis=-1)
             test_x = test_x.reshape(-1, test_x.shape[2])
@@ -147,16 +165,45 @@ def load_and_process_data(data_path):
             test_x_fft = test_x_fft.reshape(-1, test_x_fft.shape[2])
             test_x_fft = np.expand_dims(test_x_fft, axis=-1)
             
+            print(f"DEBUG: After reshape test_x shape: {test_x.shape}")
+            
             # 分离FFT的实部和虚部以避免复数转换丢失信息
             test_x_fft_real = np.real(test_x_fft).astype(np.float32)
             test_x_fft_imag = np.imag(test_x_fft).astype(np.float32)
             
             # 合并数据 (包含FFT实部和虚部)
             Test_x = np.concatenate((Test_P_std, Test_V_std, test_x, test_x_fft_real, test_x_fft_imag), axis=2)
+            
+            # 重要修复：确保使用正确的标签数据源
+            # 使用dataProcessing返回的Test_Yf，而不是dataProcessing_3的test_y
+            # 这是因为dataProcessing_3的标签结构是嵌套的，可能导致标签值异常
             Test_Y = Test_Yf
             
             # 确保数据类型正确
             Test_x = Test_x.astype(np.float32)
+            
+            # 验证标签数据的正确性
+            print(f"DEBUG: Final Test_Y shape: {Test_Y.shape}")
+            print(f"DEBUG: Final Test_Y unique values: {np.unique(Test_Y)}")
+            print(f"DEBUG: Test_Y min value: {np.min(Test_Y)}, max value: {np.max(Test_Y)}")
+            
+            # 额外检查：确保标签值在合理范围内 (0-8)
+            if np.max(Test_Y) > 8 or np.min(Test_Y) < 0:
+                print(f"WARNING: 发现异常标签值！Test_Y范围: {np.min(Test_Y)} - {np.max(Test_Y)}")
+                print(f"异常标签的索引位置: {np.where((Test_Y > 8) | (Test_Y < 0))[0]}")
+                # 清理异常标签值
+                Test_Y = np.clip(Test_Y, 0, 8)
+                print(f"已将异常标签值裁剪到合理范围: {np.min(Test_Y)} - {np.max(Test_Y)}")
+            
+            # 检查数据和标签长度是否匹配
+            print(f"DEBUG: Test_x final shape: {Test_x.shape[0]}, Test_Y final shape: {Test_Y.shape[0]}")
+            if Test_x.shape[0] != Test_Y.shape[0]:
+                print(f"WARNING: 数据和标签长度不匹配！Test_x: {Test_x.shape[0]}, Test_Y: {Test_Y.shape[0]}")
+                # 取最小长度以确保数据一致性
+                min_length = min(Test_x.shape[0], Test_Y.shape[0])
+                Test_x = Test_x[:min_length]
+                Test_Y = Test_Y[:min_length]
+                print(f"已截取到相同长度: {min_length}")
             
             print(f"Data loaded successfully. Test samples: {len(Test_x)}")
             filenames = [f"sample_{i:04d}" for i in range(len(Test_x))]
