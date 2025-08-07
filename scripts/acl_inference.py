@@ -295,10 +295,15 @@ def run_acl_inference(model, data, batch_size, label_names):
         print(f"DEBUG: ACL原始输出shape: {pred_final.shape}")
         print(f"DEBUG: ACL原始输出内容示例: {pred_final[:min(2, len(pred_final))]}")
         
-        if len(pred_final.shape) == 1:
+        # 修复：正确处理3D输出 [batch, 1, num_classes]
+        if len(pred_final.shape) == 3:
+            # 如果是3D输出，压缩第二维
+            pred_final = pred_final.squeeze(1)
+        elif len(pred_final.shape) == 1:
+            # 如果是1D输出，reshape为2D
             pred_final = pred_final.reshape(batch_data.shape[0], -1)
         
-        print(f"DEBUG: ACL reshape后shape: {pred_final.shape}")
+        print(f"DEBUG: ACL修复后shape: {pred_final.shape}")
         print(f"DEBUG: 预期的类别数: 9 (0-8)")
         
         # 重要修复：确保输出维度正确
