@@ -148,14 +148,6 @@ def load_and_process_data(data_path):
         if os.path.exists(data_1_path):
             train_x, test_x, train_y, test_y, train_x_fft, test_x_fft = dataProcessing_3(file_path=data_1_path)
             
-            # 调试信息：检查dataProcessing_3返回的数据结构
-            # 这是为了诊断标签值16异常问题而添加的调试信息
-            print(f"DEBUG: Original test_x shape: {test_x.shape}")
-            print(f"DEBUG: Original test_y shape: {test_y.shape}")
-            print(f"DEBUG: test_y unique values: {np.unique(test_y)}")
-            print(f"DEBUG: Test_Yf shape: {Test_Yf.shape}")
-            print(f"DEBUG: Test_Yf unique values: {np.unique(Test_Yf)}")
-            
             # 正确处理dataProcessing_3的数据结构
             # dataProcessing_3返回的数据每个样本重复4次，需要展平处理
             train_x = train_x.reshape(-1, train_x.shape[2])
@@ -164,8 +156,6 @@ def load_and_process_data(data_path):
             test_x = np.expand_dims(test_x, axis=-1)
             test_x_fft = test_x_fft.reshape(-1, test_x_fft.shape[2])
             test_x_fft = np.expand_dims(test_x_fft, axis=-1)
-            
-            print(f"DEBUG: After reshape test_x shape: {test_x.shape}")
             
             # 分离FFT的实部和虚部以避免复数转换丢失信息
             test_x_fft_real = np.real(test_x_fft).astype(np.float32)
@@ -182,11 +172,6 @@ def load_and_process_data(data_path):
             # 确保数据类型正确
             Test_x = Test_x.astype(np.float32)
             
-            # 验证标签数据的正确性
-            print(f"DEBUG: Final Test_Y shape: {Test_Y.shape}")
-            print(f"DEBUG: Final Test_Y unique values: {np.unique(Test_Y)}")
-            print(f"DEBUG: Test_Y min value: {np.min(Test_Y)}, max value: {np.max(Test_Y)}")
-            
             # 额外检查：确保标签值在合理范围内 (0-8)
             if np.max(Test_Y) > 8 or np.min(Test_Y) < 0:
                 print(f"WARNING: 发现异常标签值！Test_Y范围: {np.min(Test_Y)} - {np.max(Test_Y)}")
@@ -196,7 +181,6 @@ def load_and_process_data(data_path):
                 print(f"已将异常标签值裁剪到合理范围: {np.min(Test_Y)} - {np.max(Test_Y)}")
             
             # 检查数据和标签长度是否匹配
-            print(f"DEBUG: Test_x final shape: {Test_x.shape[0]}, Test_Y final shape: {Test_Y.shape[0]}")
             if Test_x.shape[0] != Test_Y.shape[0]:
                 print(f"WARNING: 数据和标签长度不匹配！Test_x: {Test_x.shape[0]}, Test_Y: {Test_Y.shape[0]}")
                 # 取最小长度以确保数据一致性
@@ -291,10 +275,6 @@ def run_acl_inference(model, data, batch_size, label_names):
         # 假设第一个输出是预测结果，重新调整形状
         pred_final = outputs[0]
         
-        # 调试信息：检查ACL模型输出
-        print(f"DEBUG: ACL原始输出shape: {pred_final.shape}")
-        print(f"DEBUG: ACL原始输出内容示例: {pred_final[:min(2, len(pred_final))]}")
-        
         # 修复：正确处理3D输出 [batch, 1, num_classes]
         if len(pred_final.shape) == 3:
             # 如果是3D输出，压缩第二维
@@ -302,9 +282,6 @@ def run_acl_inference(model, data, batch_size, label_names):
         elif len(pred_final.shape) == 1:
             # 如果是1D输出，reshape为2D
             pred_final = pred_final.reshape(batch_data.shape[0], -1)
-        
-        print(f"DEBUG: ACL修复后shape: {pred_final.shape}")
-        print(f"DEBUG: 预期的类别数: 9 (0-8)")
         
         # 重要修复：确保输出维度正确
         # 模型应该输出9个类别的logits (0-8)
@@ -320,8 +297,6 @@ def run_acl_inference(model, data, batch_size, label_names):
                 print(f"ERROR: ACL模型输出维度不足！无法进行预测")
                 continue
         
-        print(f"DEBUG: ACL最终logits shape: {pred_final.shape}")
-        
         # 保存原始logits
         all_logits.extend(pred_final)
         
@@ -329,7 +304,6 @@ def run_acl_inference(model, data, batch_size, label_names):
         pred_classes = np.argmax(pred_final, axis=1)
         
         # 验证预测类别范围
-        print(f"DEBUG: 当前批次预测类别范围: {np.min(pred_classes)} - {np.max(pred_classes)}")
         if np.max(pred_classes) >= expected_num_classes or np.min(pred_classes) < 0:
             print(f"WARNING: 发现异常预测值！预测范围: {np.min(pred_classes)} - {np.max(pred_classes)}")
             # 将异常预测值裁剪到合理范围
