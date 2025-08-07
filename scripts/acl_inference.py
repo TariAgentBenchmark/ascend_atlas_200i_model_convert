@@ -130,7 +130,6 @@ def load_and_process_data(data_path):
     
     # 检查数据路径
     if not os.path.exists(data_path):
-        print(f"Warning: Data path {data_path} does not exist. Creating dummy data for testing.")
         # 创建虚拟数据 (现在包含7个特征: pressure, vibration(3), physical, physical_fft_real, physical_fft_imag)
         dummy_data = np.random.randn(80, 5120, 7).astype(np.float32)
         dummy_labels = np.random.randint(0, 9, 80)
@@ -174,27 +173,21 @@ def load_and_process_data(data_path):
             
             # 额外检查：确保标签值在合理范围内 (0-8)
             if np.max(Test_Y) > 8 or np.min(Test_Y) < 0:
-                print(f"WARNING: 发现异常标签值！Test_Y范围: {np.min(Test_Y)} - {np.max(Test_Y)}")
-                print(f"异常标签的索引位置: {np.where((Test_Y > 8) | (Test_Y < 0))[0]}")
                 # 清理异常标签值
                 Test_Y = np.clip(Test_Y, 0, 8)
-                print(f"已将异常标签值裁剪到合理范围: {np.min(Test_Y)} - {np.max(Test_Y)}")
             
             # 检查数据和标签长度是否匹配
             if Test_x.shape[0] != Test_Y.shape[0]:
-                print(f"WARNING: 数据和标签长度不匹配！Test_x: {Test_x.shape[0]}, Test_Y: {Test_Y.shape[0]}")
                 # 取最小长度以确保数据一致性
                 min_length = min(Test_x.shape[0], Test_Y.shape[0])
                 Test_x = Test_x[:min_length]
                 Test_Y = Test_Y[:min_length]
-                print(f"已截取到相同长度: {min_length}")
             
             print(f"Data loaded successfully. Test samples: {len(Test_x)}")
             filenames = [f"sample_{i:04d}" for i in range(len(Test_x))]
             return Test_x, Test_Y, filenames
     
     # 如果找不到数据，创建虚拟数据
-    print("Warning: Required data folders not found. Creating dummy data for testing.")
     dummy_data = np.random.randn(80, 5120, 5).astype(np.float32)
     dummy_labels = np.random.randint(0, 9, 80)
     filenames = [f"dummy_{i:04d}" for i in range(80)]
@@ -287,14 +280,11 @@ def run_acl_inference(model, data, batch_size, label_names):
         # 模型应该输出9个类别的logits (0-8)
         expected_num_classes = 9
         if pred_final.shape[1] != expected_num_classes:
-            print(f"WARNING: ACL模型输出维度异常！期望{expected_num_classes}，实际{pred_final.shape[1]}")
             if pred_final.shape[1] > expected_num_classes:
                 # 如果输出维度过大，只取前9个
-                print(f"截取前{expected_num_classes}个输出作为类别logits")
                 pred_final = pred_final[:, :expected_num_classes]
             else:
                 # 如果输出维度过小，这是严重错误
-                print(f"ERROR: ACL模型输出维度不足！无法进行预测")
                 continue
         
         # 保存原始logits
@@ -305,10 +295,8 @@ def run_acl_inference(model, data, batch_size, label_names):
         
         # 验证预测类别范围
         if np.max(pred_classes) >= expected_num_classes or np.min(pred_classes) < 0:
-            print(f"WARNING: 发现异常预测值！预测范围: {np.min(pred_classes)} - {np.max(pred_classes)}")
             # 将异常预测值裁剪到合理范围
             pred_classes = np.clip(pred_classes, 0, expected_num_classes - 1)
-            print(f"已将预测值裁剪到合理范围: {np.min(pred_classes)} - {np.max(pred_classes)}")
         
         # 计算置信度（softmax）
         exp_logits = np.exp(pred_final - np.max(pred_final, axis=1, keepdims=True))
@@ -476,8 +464,6 @@ def main():
     
     # 检查ACL模型文件是否存在
     if not os.path.exists(args.model_path):
-        print(f"Error: ACL model file not found: {args.model_path}")
-        print("Please ensure the model file exists and is accessible.")
         return
     
     # 加载ACL模型
@@ -485,8 +471,6 @@ def main():
     try:
         model = ACLModelInference(args.model_path)
     except Exception as e:
-        print(f"Error loading ACL model: {e}")
-        print("Please ensure ACL runtime is properly installed and configured.")
         return
     
     # 加载数据
