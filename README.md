@@ -51,16 +51,16 @@ Excel文件包含以下表格：
 ### 使用方法
 PyTorch推理
 ```bash
-python scripts/pytorch_inference.py --model-path lightning_logs/version_0/checkpoints/epoch=150-step=150.ckpt --data-path ./data --output output/pytorch_results.xlsx --batch-size 8 --max-batches 100
+python scripts/pytorch_inference.py --model-path lightning_logs/version_0/checkpoints/epoch=150-step=150.ckpt --data-path ./data --output output/pytorch_results.xlsx --batch-size 8 --max-batches 10000
 ```
 
 ONNX推理
 ```
-python scripts/onnx_inference.py --model-path model.onnx --data-path ./data --output output/onnx_results.xlsx --batch-size 8    --max-batches 100
+python scripts/onnx_inference.py --model-path model.onnx --data-path ./data --output output/onnx_results.xlsx --batch-size 8    --max-batches 10000
 ```
 ACL推理
 ```
-python scripts/acl_inference.py --model-path path/to/model.om --data-path ./data --output acl_results.xlsx --batch-size 8 --max-batches 10
+python scripts/acl_inference.py --model-path path/to/model.om --data-path ./data --output acl_results.xlsx --batch-size 1 --max-batches 10000
 ```
 对比logits
 ```bash
